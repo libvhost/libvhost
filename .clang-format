@@ -1,0 +1,13 @@
+BasedOnStyle: Google
+Standard: Cpp11
+IndentWidth: 4
+TabWidth: 4
+PointerAlignment: Left
+DerivePointerAlignment: false
+SpacesBeforeTrailingComments: 2
+AccessModifierOffset: -2
+ForEachMacros: [FOREACH, FOREACH_SAFE, FOREACH_NOT_NULL]
+AlignConsecutiveAssignments: false
+ColumnLimit: 120
+SortIncludes: false
+UseTab: Never
