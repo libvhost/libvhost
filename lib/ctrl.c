@@ -134,6 +134,7 @@ static void libvhost_mem_free(struct libvhost_mem* mem) {
     int i;
     for (i = 0; i < mem->nregions; i++) {
         if (mem->hugepages[i].fd >= 0) {
+            munmap((void*)mem->hugepages[i].addr, mem->hugepages[i].size);
             close(mem->hugepages[i].fd);
         }
     }
@@ -207,6 +208,7 @@ static void __ctrl_free_memory(struct libvhost_ctrl* ctrl) {
 }
 
 void libvhost_ctrl_destroy(struct libvhost_ctrl* ctrl) {
+    close(ctrl->sock);
     __ctrl_free_memory(ctrl);
     free(ctrl->sock_path);
     free(ctrl->vqs);
