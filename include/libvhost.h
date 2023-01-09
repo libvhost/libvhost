@@ -8,7 +8,7 @@
  * See the COPYING file in the top-level directory.
  */
 #ifndef __LIBVHOST_H__
-#define __LIBVHOST_H__s
+#define __LIBVHOST_H__
 
 #include <stdbool.h>
 #include <stdint.h>
