@@ -22,6 +22,32 @@
 #define wmb() __asm volatile("" ::: "memory")
 
 #define VIRTIO_MAX_IODEPTH 256
+struct vhost_inflight {
+    int fd;
+    void* addr;
+    uint64_t size;
+    uint64_t offset;
+    uint16_t queue_size;
+};
+
+struct libvhost_ctrl {
+    char* sock_path;
+    int status;
+    int sock;
+    int epollfd;
+    uint64_t features;
+    uint64_t protocol_features;
+    struct libvhost_virt_queue* vqs;
+    int nr_vqs;
+    pthread_t thread;
+    struct vhost_inflight inflight;
+    struct libvhost_mem* mem;
+    bool stopped;
+
+    /* vritio_blk: struct virtio_blk_config */
+    /* virtio_scsi */
+    void* config;
+};
 
 enum libvhost_io_type {
     VHOST_IO_READ,

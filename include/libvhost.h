@@ -14,26 +14,14 @@
 #include <stdint.h>
 #include <sys/uio.h>
 #include <linux/virtio_blk.h>
+#include <pthread.h>
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
 struct libvhost_mem;
-struct libvhost_ctrl {
-    char* sock_path;
-    int status;
-    int sock;
-    uint64_t features;
-    struct libvhost_virt_queue* vqs;
-    int nr_vqs;
-
-    struct libvhost_mem* mem;
-
-    /* vritio_blk: struct virtio_blk_config */
-    /* virtio_scsi */
-    void* config;
-};
+struct libvhost_ctrl;
 
 /* vhost controller */
 struct libvhost_ctrl* libvhost_ctrl_create(const char* path);

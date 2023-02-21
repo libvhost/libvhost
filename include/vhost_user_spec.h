@@ -46,6 +46,8 @@ enum libvhost_user_msg_type {
     VHOST_USER_POSTCOPY_ADVISE = 28,
     VHOST_USER_POSTCOPY_LISTEN = 29,
     VHOST_USER_POSTCOPY_END = 30,
+    VHOST_USER_GET_INFLIGHT_FD = 31,
+    VHOST_USER_SET_INFLIGHT_FD = 32,
     VHOST_USER_MAX
 };
 
@@ -90,6 +92,13 @@ typedef struct VhostVringAddr {
     uint64_t log_guest_addr;
 } VhostVringAddr;
 
+typedef struct VhostUserInflight {
+    uint64_t mmap_size;
+    uint64_t mmap_offset;
+    uint16_t num_queues;
+    uint16_t queue_size;
+} VhostUserInflight;
+
 typedef struct VhostUserMsg {
     enum libvhost_user_msg_type request;
 
@@ -103,6 +112,7 @@ typedef struct VhostUserMsg {
         uint64_t u64;
         VhostVringState state;
         VhostVringAddr addr;
+        VhostUserInflight inflight;
         struct libvhost_user_memory memory;
         struct libvhost_user_config cfg;
     } payload;
@@ -121,5 +131,20 @@ typedef struct VhostUserMsg {
 #define VHOST_USER_F_PROTOCOL_FEATURES 30
 #define VIRTIO_F_VERSION_1 32
 #define VIRTIO_F_RING_PACKED 34
+
+/** Protocol features. */
+#define VHOST_USER_PROTOCOL_F_MQ 0
+#define VHOST_USER_PROTOCOL_F_LOG_SHMFD 1
+#define VHOST_USER_PROTOCOL_F_RARP 2
+#define VHOST_USER_PROTOCOL_F_REPLY_ACK 3
+#define VHOST_USER_PROTOCOL_F_NET_MTU 4
+#define VHOST_USER_PROTOCOL_F_SLAVE_REQ 5
+#define VHOST_USER_PROTOCOL_F_CRYPTO_SESSION 7
+#define VHOST_USER_PROTOCOL_F_PAGEFAULT 8
+#define VHOST_USER_PROTOCOL_F_CONFIG 9
+#define VHOST_USER_PROTOCOL_F_SLAVE_SEND_FD 10
+#define VHOST_USER_PROTOCOL_F_HOST_NOTIFIER 11
+#define VHOST_USER_PROTOCOL_F_INFLIGHT_SHMFD 12
+#define VHOST_USER_PROTOCOL_F_STATUS 16
 
 #endif

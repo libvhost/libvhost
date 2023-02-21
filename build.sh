@@ -5,8 +5,7 @@ type=${TYPE:-asan}
 [ $type = "rel" ] && type=RelWithDebInfo
 [ $type = "debug" ] && type=Debug
 cmake -B build -GNinja -DCMAKE_BUILD_TYPE=$type -DCMAKE_INSTALL_PREFIX=build
-ninja -C build -v
-build/examples/vhost_test /var/lib/zbs/aurorad/vhost-blk.0
+ninja -C build -v && build/examples/vhost_test /var/lib/zbs/aurorad/vhost-blk.0
 # ninja -C build install -v
 #cd build; cpack3
 #cd -

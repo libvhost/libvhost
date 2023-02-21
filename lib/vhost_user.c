@@ -59,12 +59,23 @@ static int vhost_user_write(int fd, void* buf, int len, int* fds, int fd_num) {
     return 0;
 }
 
-static int vhost_user_read(int fd, struct VhostUserMsg* msg) {
+static int vhost_user_read(int fd, struct VhostUserMsg* msg, int* fds, int* fd_num) {
     uint32_t valid_flags = VHOST_USER_REPLY_MASK | VHOST_USER_VERSION;
     ssize_t ret;
     size_t sz_hdr = VHOST_USER_HDR_SIZE, sz_payload;
+    struct cmsghdr* cmsg;
+    struct msghdr msgh;
+    struct iovec iov;
+    char control[CMSG_SPACE((*fd_num) * sizeof(int))];
 
-    ret = recv(fd, (void*)msg, sz_hdr, 0);
+    iov.iov_base = (uint8_t*)msg;
+    iov.iov_len = sz_hdr;
+    msgh.msg_iov = &iov;
+    msgh.msg_iovlen = 1;
+    msgh.msg_control = control;
+    msgh.msg_controllen = sizeof(control);
+
+    ret = recvmsg(fd, &msgh, 0);
     if ((size_t)ret != sz_hdr) {
         WARN("Failed to recv msg hdr: %zd instead of %zu.\n", ret, sz_hdr);
         if (ret == -1) {
@@ -80,6 +91,15 @@ static int vhost_user_read(int fd, struct VhostUserMsg* msg) {
         return -EIO;
     }
 
+    if (fds && fd_num) {
+        // parse the control message
+        for (cmsg = CMSG_FIRSTHDR(&msgh); cmsg != NULL; cmsg = CMSG_NXTHDR(&msgh, cmsg)) {
+            if (cmsg->cmsg_level == SOL_SOCKET && cmsg->cmsg_type == SCM_RIGHTS) {
+                *fd_num = (cmsg->cmsg_len - CMSG_LEN(0)) / sizeof(int);
+                memcpy(fds, CMSG_DATA(cmsg), (*fd_num) * sizeof(int));
+            }
+        }
+    }
     sz_payload = msg->size;
 
     if (sz_payload > VHOST_USER_PAYLOAD_SIZE) {
@@ -120,6 +140,8 @@ static const char* const vhost_msg_strings[VHOST_USER_MAX] = {
     [VHOST_USER_GET_QUEUE_NUM] = "VHOST_USER_GET_QUEUE_NUM",
     [VHOST_USER_GET_CONFIG] = "VHOST_USER_GET_CONFIG",
     [VHOST_USER_SET_CONFIG] = "VHOST_USER_SET_CONFIG",
+    [VHOST_USER_GET_INFLIGHT_FD] = "VHOST_USER_GET_INFLIGHT_FD",
+    [VHOST_USER_SET_INFLIGHT_FD] = "VHOST_USER_SET_INFLIGHT_FD",
 };
 
 int vhost_ioctl(struct libvhost_ctrl *ctrl, enum libvhost_user_msg_type req, void* arg) {
@@ -129,6 +151,8 @@ int vhost_ioctl(struct libvhost_ctrl *ctrl, enum libvhost_user_msg_type req, voi
     int fds[VHOST_MEMORY_MAX_NREGIONS];
     int fd_num = 0;
     int i, len, rc;
+    int recv_fds[1];
+    int out_fds_num = 1;
 
     DEBUG("Sent message %2d = %s\n", req, vhost_msg_strings[req]);
 
@@ -211,6 +235,19 @@ int vhost_ioctl(struct libvhost_ctrl *ctrl, enum libvhost_user_msg_type req, voi
             msg.size = sizeof(msg.payload.cfg);
             break;
 
+        case VHOST_USER_GET_INFLIGHT_FD:
+            memcpy(&msg.payload.inflight, arg, sizeof(msg.payload.inflight));
+            msg.size = sizeof(msg.payload.inflight);
+            need_reply = 1;
+            break;
+
+        case VHOST_USER_SET_INFLIGHT_FD:
+            memcpy(&msg.payload.inflight, arg, sizeof(msg.payload.inflight));
+            msg.size = sizeof(msg.payload.inflight);
+            fds[fd_num++] = ctrl->inflight.fd;
+            INFO("set inflight fd: %d\n", ctrl->inflight.fd);
+            break;
+
         default:
             ERROR("trying to send unknown msg\n");
             return -EINVAL;
@@ -223,13 +260,8 @@ int vhost_ioctl(struct libvhost_ctrl *ctrl, enum libvhost_user_msg_type req, voi
         return rc;
     }
 
-    if (req == VHOST_USER_SET_MEM_TABLE)
-        for (i = 0; i < fd_num; ++i) {
-            close(fds[i]);
-        }
-
     if (need_reply) {
-        rc = vhost_user_read(ctrl->sock, &msg);
+        rc = vhost_user_read(ctrl->sock, &msg, recv_fds, &out_fds_num);
         if (rc < 0) {
             WARN("Received msg failed: %d\n", rc);
             return rc;
@@ -264,6 +296,16 @@ int vhost_ioctl(struct libvhost_ctrl *ctrl, enum libvhost_user_msg_type req, voi
                 }
                 memcpy(arg, &msg.payload.cfg, sizeof(msg.payload.cfg));
                 break;
+            case VHOST_USER_GET_INFLIGHT_FD:
+                if (msg.size != sizeof(msg.payload.inflight)) {
+                    WARN("Received bad msg size\n");
+                    return -EIO;
+                }
+                memcpy(arg, &msg.payload.inflight, sizeof(msg.payload.inflight));
+                ctrl->inflight.fd = recv_fds[0];
+                INFO("get inflight fd: %d\n", ctrl->inflight.fd);
+                break;
+
             default:
                 WARN("Received unexpected msg type\n");
                 return -EBADMSG;

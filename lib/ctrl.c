@@ -25,8 +25,11 @@
 #include <sys/un.h>
 #include <sys/unistd.h>
 #include <sys/mman.h>
+#include <sys/epoll.h>
+#include <errno.h>
 
 static int vhost_ctrl_get_config(struct libvhost_ctrl* ctrl);
+static int vhost_enable_vq(struct libvhost_ctrl* ctrl, struct libvhost_virt_queue* vq);
 
 static const char* const vhost_msg_strings[VHOST_USER_MAX] = {
     [VHOST_USER_SET_OWNER] = "VHOST_SET_OWNER",
@@ -68,8 +71,17 @@ ring upon receiving VHOST_USER_GET_VRING_BASE.
 */
 #define DEFUALT_VHOST_FEATURES                                                                       \
     ((1ULL << VHOST_F_LOG_ALL) | (1ULL << VIRTIO_F_VERSION_1) | (1ULL << VIRTIO_F_NOTIFY_ON_EMPTY) | \
-     (1ULL << VIRTIO_RING_F_EVENT_IDX) | (1ULL << VIRTIO_RING_F_INDIRECT_DESC))
-//  (1ULL << VIRTIO_F_RING_PACKED) | (1ULL << VHOST_USER_F_PROTOCOL_FEATURES)
+     (1ULL << VIRTIO_RING_F_EVENT_IDX) | (1ULL << VIRTIO_RING_F_INDIRECT_DESC)) |                    \
+        (1ULL << VHOST_USER_F_PROTOCOL_FEATURES)
+//  (1ULL << VIRTIO_F_RING_PACKED)
+
+#define DEFAULT_VHOST_PROTOCOL_FEATURES                                                               \
+    ((1ULL << VHOST_USER_PROTOCOL_F_MQ) | (1ULL << VHOST_USER_PROTOCOL_F_LOG_SHMFD) |                 \
+     (1ULL << VHOST_USER_PROTOCOL_F_RARP) | (1ULL << VHOST_USER_PROTOCOL_F_REPLY_ACK) |               \
+     (1ULL << VHOST_USER_PROTOCOL_F_NET_MTU) | (1ULL << VHOST_USER_PROTOCOL_F_SLAVE_REQ) |            \
+     (1ULL << VHOST_USER_PROTOCOL_F_CRYPTO_SESSION) | (1ULL << VHOST_USER_PROTOCOL_F_SLAVE_SEND_FD) | \
+     (1ULL << VHOST_USER_PROTOCOL_F_HOST_NOTIFIER) | (1ULL << VHOST_USER_PROTOCOL_F_PAGEFAULT) |      \
+     (1ULL << VHOST_USER_PROTOCOL_F_INFLIGHT_SHMFD) | (1ULL << VHOST_USER_PROTOCOL_F_STATUS))
 
 #define LIBVHOST_USER_MAX_QUEUE_PAIRS 8
 
@@ -102,7 +114,7 @@ static int __hugepage_info_alloc(struct hugepage_info* info) {
         return -1;
     }
     memset((void*)info->addr, 0, info->size);
-    INFO("Add DIMM, addr: 0x%" PRIx64 " size: 0x%" PRIx64 "\n", info->addr, info->size);
+    INFO("Add DIMM, fd: %d addr: 0x%" PRIx64 " size: 0x%" PRIx64 "\n", info->fd, info->addr, info->size);
     return 0;
 }
 
@@ -169,6 +181,7 @@ int libvhost_mem_get_memory_fds(struct libvhost_ctrl* ctrl, int* fds, int* size)
             return -1;
         }
         fds[i] = mem->hugepages[i].fd;
+        DEBUG("memory region %d fd: %d\n", i, fds[i]);
     }
     *size = mem->nregions;
     return 0;
@@ -185,9 +198,11 @@ struct libvhost_ctrl* libvhost_ctrl_create(const char* path) {
         ERROR("calloc failed\n");
         return NULL;
     }
+    ctrl->stopped = false;
     ctrl->sock_path = strdup(path);
     // Set default features.
     ctrl->features = DEFUALT_VHOST_FEATURES;
+    ctrl->protocol_features = DEFAULT_VHOST_PROTOCOL_FEATURES;
     ctrl->vqs = calloc(LIBVHOST_USER_MAX_QUEUE_PAIRS, sizeof(struct libvhost_virt_queue));
     ctrl->nr_vqs = 0;
     ctrl->config = (void*)calloc(1, sizeof(struct virtio_blk_config));
@@ -208,6 +223,11 @@ static void __ctrl_free_memory(struct libvhost_ctrl* ctrl) {
 }
 
 void libvhost_ctrl_destroy(struct libvhost_ctrl* ctrl) {
+    // TODO: use load and store to make it thread safe.
+    ctrl->stopped = true;
+    if (ctrl->thread) {
+        pthread_join(ctrl->thread, NULL);
+    }
     close(ctrl->sock);
     __ctrl_free_memory(ctrl);
     free(ctrl->sock_path);
@@ -264,8 +284,42 @@ static char* get_feature_name(int bit) {
     }
 }
 
+static char* get_protocol_feature_name(int bit) {
+    switch (bit) {
+        case VHOST_USER_PROTOCOL_F_MQ:
+            return "VHOST_USER_PROTOCOL_F_MQ";
+        case VHOST_USER_PROTOCOL_F_LOG_SHMFD:
+            return "VHOST_USER_PROTOCOL_F_LOG_SHMFD";
+        case VHOST_USER_PROTOCOL_F_RARP:
+            return "VHOST_USER_PROTOCOL_F_RARP";
+        case VHOST_USER_PROTOCOL_F_REPLY_ACK:
+            return "VHOST_USER_PROTOCOL_F_REPLY_ACK";
+        case VHOST_USER_PROTOCOL_F_NET_MTU:
+            return "VHOST_USER_PROTOCOL_F_NET_MTU";
+        case VHOST_USER_PROTOCOL_F_SLAVE_REQ:
+            return "VHOST_USER_PROTOCOL_F_SLAVE_REQ";
+        case VHOST_USER_PROTOCOL_F_CRYPTO_SESSION:
+            return "VHOST_USER_PROTOCOL_F_CRYPTO_SESSION";
+        case VHOST_USER_PROTOCOL_F_PAGEFAULT:
+            return "VHOST_USER_PROTOCOL_F_PAGEFAULT";
+        case VHOST_USER_PROTOCOL_F_CONFIG:
+            return "VHOST_USER_PROTOCOL_F_CONFIG";
+        case VHOST_USER_PROTOCOL_F_SLAVE_SEND_FD:
+            return "VHOST_USER_PROTOCOL_F_SLAVE_SEND_FD";
+        case VHOST_USER_PROTOCOL_F_HOST_NOTIFIER:
+            return "VHOST_USER_PROTOCOL_F_HOST_NOTIFIER";
+        case VHOST_USER_PROTOCOL_F_INFLIGHT_SHMFD:
+            return "VHOST_USER_PROTOCOL_F_INFLIGHT_SHMFD";
+        case VHOST_USER_PROTOCOL_F_STATUS:
+            return "VHOST_USER_PROTOCOL_F_STATUS";
+        default:
+            return "UNKNOWN";
+    }
+}
+
 static int negotiate_features(struct libvhost_ctrl* ctrl) {
     uint64_t features;
+    uint64_t protocol_features;
     int i = 0;
     if (vhost_ioctl(ctrl, VHOST_USER_GET_FEATURES, &features) != 0) {
         ERROR("Unable to get vhost features\n");
@@ -277,11 +331,28 @@ static int negotiate_features(struct libvhost_ctrl* ctrl) {
         return -1;
     }
     INFO("Features:\n");
-    for (; i < 64; ++i) {
+    for (i = 0; i < 64; ++i) {
         if (ctrl->features & (1ULL << i)) {
             INFO("    bit: %2d %s\n", i, get_feature_name(i));
         }
     }
+
+    if (vhost_ioctl(ctrl, VHOST_USER_GET_PROTOCOL_FEATURES, &protocol_features) != 0) {
+        ERROR("Unable to get vhost protocol features\n");
+        return -1;
+    }
+    ctrl->protocol_features &= protocol_features;
+    if (vhost_ioctl(ctrl, VHOST_USER_SET_PROTOCOL_FEATURES, &ctrl->protocol_features) != 0) {
+        ERROR("Unable to set vhost protocol features\n");
+        return -1;
+    }
+    INFO("Protocol Features:\n");
+    for (i = 0; i < 64; ++i) {
+        if (ctrl->protocol_features & (1ULL << i)) {
+            INFO("    bit: %2d %s\n", i, get_protocol_feature_name(i));
+        }
+    }
+
     return 0;
 }
 
@@ -331,6 +402,86 @@ int libvhost_ctrl_get_numblocks(struct libvhost_ctrl* ctrl) {
            ((struct virtio_blk_config*)ctrl->config)->blk_size;
 }
 
+static int libvhost_reconnect(struct libvhost_ctrl* ctrl) {
+    struct epoll_event event;
+    int ret;
+    INFO("Reconnecting to vhost-user socket: %s", ctrl->sock_path);
+    // close the old socket.
+    close(ctrl->sock);
+    while (1) {
+        if (libvhost_ctrl_connect(ctrl) == 0) {
+            break;
+        }
+        sleep(1);
+        WARN("Reconnecting to vhost-user socket %s failed, wait 1 s", ctrl->sock_path);
+    }
+    event.events = EPOLLIN;
+    event.data.fd = ctrl->sock;
+    ret = epoll_ctl(ctrl->epollfd, EPOLL_CTL_ADD, ctrl->sock, &event);
+    if (ret == -1) {
+        ERROR("epoll_ctl failed: %s\n", strerror(errno));
+        return ret;
+    }
+    libvhost_ctrl_setup(ctrl);
+    // enable all vqs.
+    for (int i = 0; i < ctrl->nr_vqs; ++i) {
+        if (vhost_enable_vq(ctrl, &ctrl->vqs[i]) != 0) {
+            ERROR("Failed to enable vq: %d", i);
+        }
+    }
+}
+
+static void* reconnect_thread_worker(void* arg) {
+    struct libvhost_ctrl* ctrl = arg;
+    struct epoll_event event;
+    int ret;
+    INFO("Start the reconnect thread.\n");
+    ctrl->epollfd = epoll_create1(0);
+    if (ctrl->epollfd == -1) {
+        ERROR("epoll_create1 failed: %s\n", strerror(errno));
+        return NULL;
+    }
+    event.events = EPOLLIN;
+    event.data.fd = ctrl->sock;
+    ret = epoll_ctl(ctrl->epollfd, EPOLL_CTL_ADD, ctrl->sock, &event);
+    if (ret == -1) {
+        ERROR("epoll_ctl failed: %s\n", strerror(errno));
+        return NULL;
+    }
+    while (!ctrl->stopped) {
+        ret = epoll_wait(ctrl->epollfd, &event, 1, 100 /* 100ms*/);
+        if (ret == -1) {
+            ERROR("epoll_wait failed: %s\n", strerror(errno));
+            return NULL;
+        }
+        if (ret == 0) {
+            DEBUG("epoll_wait timeout.\n");
+            continue;
+        }
+        INFO("epoll_wait got event fd: %d ctrl sock: %d, events: %d\n", event.data.fd, ctrl->sock, event.events);
+        if (event.data.fd == ctrl->sock) {
+            if ((event.events & EPOLLRDHUP) || (event.events & EPOLLHUP)) {
+                WARN("epoll events: %d\n", event.events);
+                ret = epoll_ctl(ctrl->epollfd, EPOLL_CTL_DEL, ctrl->sock, NULL);
+                if (ret == -1) {
+                    ERROR("epoll_ctl failed: %s\n", strerror(errno));
+                    return NULL;
+                }
+                libvhost_reconnect(ctrl);
+            }
+        }
+    }
+    INFO("Stop the reconnect thread.\n");
+    return NULL;
+}
+
+void libvhost_init_reconnect(struct libvhost_ctrl* ctrl) {
+    if (ctrl->thread != 0) {
+        return;
+    }
+    pthread_create(&ctrl->thread, NULL, reconnect_thread_worker, ctrl);
+}
+
 int libvhost_ctrl_setup(struct libvhost_ctrl* ctrl) {
     struct libvhost_user_memory memory;
     int ret;
@@ -346,14 +497,63 @@ int libvhost_ctrl_setup(struct libvhost_ctrl* ctrl) {
     if (vhost_ioctl(ctrl, VHOST_USER_SET_MEM_TABLE, &memory) != 0) {
         goto fail;
     }
+    libvhost_init_reconnect(ctrl);
     return 0;
 fail:
     close(ctrl->sock);
     return -1;
 }
 
+static int setup_inflight(struct libvhost_virt_queue* vq) {
+    struct libvhost_ctrl* ctrl = vq->ctrl;
+    struct VhostUserInflight inflight;
+    void* addr;
+    // check features first.
+    // if (!(ctrl->features & (1ULL << VHOST_USER_PROTOCOL_F_INFLIGHT_SHMFD))) {
+    //    return 0;
+    //}
+    if (!ctrl->inflight.addr) {
+        inflight.num_queues = ctrl->nr_vqs;
+        inflight.queue_size = vq->size;
+
+        // backend will allocate the shared memory and return the new fd.
+        if (vhost_ioctl(ctrl, VHOST_USER_GET_INFLIGHT_FD, &inflight) != 0) {
+            ERROR("Unable to get vhost inflight\n");
+            return -1;
+        }
+        addr = mmap(0, inflight.mmap_size, PROT_READ | PROT_WRITE, MAP_SHARED, ctrl->inflight.fd, inflight.mmap_offset);
+        if (addr == MAP_FAILED) {
+            ERROR("Failed to mmap mem fd");
+            close(ctrl->inflight.fd);
+            return -EFAULT;
+        }
+        ctrl->inflight.addr = addr;
+        ctrl->inflight.size = inflight.mmap_size;
+        ctrl->inflight.offset = inflight.mmap_offset;
+    }
+    inflight.mmap_size = ctrl->inflight.size;
+    inflight.mmap_offset = ctrl->inflight.offset;
+    inflight.num_queues = ctrl->nr_vqs;
+    inflight.queue_size = vq->size;
+    // check features first.
+    // if (!(ctrl->features & (1ULL << VHOST_USER_PROTOCOL_F_INFLIGHT_SHMFD))) {
+    //    return 0;
+    //}
+    if (vhost_ioctl(ctrl, VHOST_USER_SET_INFLIGHT_FD, &inflight) != 0) {
+        ERROR("Unable to set vhost inflight\n");
+        return -1;
+    }
+    return 0;
+}
+
 static int vhost_enable_vq(struct libvhost_ctrl* ctrl, struct libvhost_virt_queue* vq) {
     VhostVringState state;
+
+    if (setup_inflight(vq) != 0) {
+        ERROR("Unable to setup inflight\n");
+        return -1;
+    }
+
     state.index = vq->idx;
     state.num = vq->size;
     INFO("Setup virtqueue \n");
