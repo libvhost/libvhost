@@ -163,6 +163,12 @@ int virtqueue_get(struct libvhost_virt_queue* vq, struct libvhost_io_task** out_
     id = vq->vring.used->ring[last_used].id;
     len = vq->vring.used->ring[last_used].len;
     task = vq->desc_state[id];
+    if (!task) {
+        ERROR("task is null\n");
+        exit(EXIT_FAILURE);
+    }
+    // clear the desc_state to avoid info leak;
+    vq->desc_state[id] = NULL;
     DEBUG(
         "[VIRTIO] USED RING last_used_idx: %d, last_used: %d, req id: %d len: "
         "%d task: %p used: %d\n",
