@@ -19,6 +19,11 @@
 #include <sys/types.h>
 #include <time.h>
 #include <unistd.h>
+#include <sys/syscall.h>
+
+pid_t gettid(void) {
+    return syscall(__NR_gettid);
+}
 
 void DumpHex(const void* data, size_t size) {
     char ascii[17];
@@ -81,5 +86,5 @@ void __vhost_log(enum LOG_LEVEL level, const char* file, const int line, const c
     vsnprintf(buf, sizeof(buf), fmt, ap);
     gettimestr(timestamp, sizeof(timestamp));
     // I1201 17:40:48.639746 14188 thread.cc:114]
-    fprintf(stderr, "%s%s %d %s:%d] %s", level_names[level], timestamp, getpid(), basename(file), line, buf);
+    fprintf(stderr, "%s%s %d %s:%d] %s", level_names[level], timestamp, gettid(), basename(file), line, buf);
 }
