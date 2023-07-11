@@ -68,6 +68,7 @@ static int vhost_user_read(int fd, struct VhostUserMsg* msg, int* fds, int* fd_n
     struct iovec iov;
     char control[CMSG_SPACE((*fd_num) * sizeof(int))];
 
+    memset(&msgh, 0, sizeof(msgh));
     iov.iov_base = (uint8_t*)msg;
     iov.iov_len = sz_hdr;
     msgh.msg_iov = &iov;

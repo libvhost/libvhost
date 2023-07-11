@@ -43,6 +43,8 @@ typedef struct VhostEvent {
 
 int libvhost_read(struct libvhost_ctrl* ctrl, int q_idx, uint64_t offset, char* buf, int len);
 int libvhost_write(struct libvhost_ctrl* ctrl, int q_idx, uint64_t offset, char* buf, int len);
+int libvhost_discard(struct libvhost_ctrl* ctrl, int q_idx, uint64_t offset, int len);
+int libvhost_write_zeroes(struct libvhost_ctrl* ctrl, int q_idx, uint64_t offset, int len, bool unmap);
 int libvhost_readv(struct libvhost_ctrl* ctrl, int q_idx, uint64_t offset, struct iovec* iov, int iovcnt);
 int libvhost_writev(struct libvhost_ctrl* ctrl, int q_idx, uint64_t offset, struct iovec* iov, int iovcnt);
 int libvhost_submit(struct libvhost_ctrl* ctrl, int q_idx, uint64_t offset, struct iovec* iov, int iovcnt, bool write,

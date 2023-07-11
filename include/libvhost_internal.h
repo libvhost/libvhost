@@ -53,6 +53,8 @@ enum libvhost_io_type {
     VHOST_IO_READ,
     VHOST_IO_WRITE,
     VHOST_IO_FLUSH,
+    VHOST_IO_DISCARD,
+    VHOST_IO_WRITE_ZEROES,
 };
 
 typedef int (*VhostIOCB)(void* task);
