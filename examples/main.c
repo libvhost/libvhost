@@ -66,6 +66,50 @@ fail:
     return ret;
 }
 
+int test_discard(struct libvhost_ctrl* ctrl) {
+    int i;
+    int ret = 0;
+    int buf_size = 1 << 20;
+    char* rbuf;
+    char* zero_buff;
+    rbuf = (char*)libvhost_malloc(ctrl, buf_size);
+    CHECK(rbuf);
+    zero_buff = (char*)libvhost_malloc(ctrl, buf_size);
+    CHECK(zero_buff);
+    memset((void*)zero_buff, 0, buf_size);
+    char* wbuf;
+    wbuf = (char*)libvhost_malloc(ctrl, buf_size);
+    CHECK(wbuf);
+
+    for (i = 0; i < 1; ++i) {
+        printf("============== %d ==================\n", i);
+        random_buf(wbuf, buf_size);
+        libvhost_write(ctrl, 0, i << 9, wbuf, buf_size);
+        if (libvhost_discard(ctrl, 0, i << 9, buf_size) != 0) {
+            printf("discard fail\n");
+            goto fail;
+        }
+        libvhost_read(ctrl, 0, i << 9, rbuf, buf_size);
+        if (0 != my_memcmp(zero_buff, rbuf, buf_size)) {
+            printf("miscompare failed: %d\n", memcmp(zero_buff, rbuf, buf_size));
+            ret = -1;
+            printf("wbuf: \n");
+            DumpHex((void*)zero_buff, 16);
+            printf("rbuf: \n");
+            DumpHex((void*)rbuf, 16);
+            break;
+        }
+        printf("discard success\n");
+    }
+
+fail:
+    libvhost_free(ctrl, rbuf);
+    libvhost_free(ctrl, wbuf);
+    libvhost_free(ctrl, zero_buff);
+
+    return ret;
+}
+
 int test_sync_big_io(struct libvhost_ctrl* ctrl) {
     int i;
     int ret = 0;
@@ -201,6 +245,12 @@ int main(int argc, char** argv) {
     ret = test_sync_big_io(ctrl);
     if (ret != 0) {
         printf("test_sync_big_io failed: %d\n", ret);
+        goto fail_ctrl;
+    }
+
+    ret = test_discard(ctrl);
+    if (ret != 0) {
+        printf("test_discard failed: %d\n", ret);
         goto fail_ctrl;
     }
 
