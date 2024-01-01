@@ -197,17 +197,107 @@ int test_async_io(struct libvhost_ctrl* ctrl) {
     return ret;
 }
 
-int main(int argc, char** argv) {
-    int ret = 0;
-    int i;
-    if (argc != 2) {
-        printf("Usage: %s <socket_path>\n", argv[0]);
-        return 1;
+static int test_blk(struct libvhost_ctrl* ctrl) {
+    int ret;
+
+    ret = test_sync_big_io(ctrl);
+    if (ret != 0) {
+        printf("test_sync_big_io failed: %d\n", ret);
+        return ret;
     }
 
-    struct libvhost_ctrl* ctrl = libvhost_ctrl_create(argv[1]);
+    ret = test_discard(ctrl);
+    if (ret != 0) {
+        printf("test_discard failed: %d\n", ret);
+        return ret;
+    }
+
+    return 0;
+}
+
+static int test_scsi(struct libvhost_ctrl* ctrl) {
+    int i;
+    char *rbuf, *wbuf;
+    int ret = 0;
+    int buf_size = 4 << 20; // SPDK limits the io size to (4 << 20) / bdev_number_blocks
+
+    wbuf = (char*)libvhost_malloc(ctrl, buf_size);
+    CHECK(wbuf);
+    rbuf = (char*)libvhost_malloc(ctrl, buf_size);
+    CHECK(rbuf);
+
+    random_buf(wbuf, buf_size);
+    libvhost_write(ctrl, 0, 0 << 9, wbuf, buf_size);
+    libvhost_read(ctrl, 0, 0 << 9, rbuf, buf_size);
+    if (0 != my_memcmp(wbuf, rbuf, buf_size)) {
+        printf("miscompare failed: %d\n", memcmp(wbuf, rbuf, buf_size));
+        ret = -1;
+        printf("wbuf: \n");
+        DumpHex((void*)wbuf, 16);
+        printf("rbuf: \n");
+        DumpHex((void*)rbuf, 16);
+        goto fail;
+    }
+    printf("vhost-scsi sync read write ok\n");
+
+    test_async_io(ctrl);
+    printf("vhost-scsi async io ok\n");
+
+fail:
+    libvhost_free(ctrl, wbuf);
+    libvhost_free(ctrl, rbuf);
+    return ret;
+}
+
+static void print_usage() {
+    printf("Usage: main -p <socket_path> [-s] [-t <target>] [-h]\n");
+    printf("Options:\n");
+    printf("  -p, Vhost controller socket path, required\n");
+    printf("  -s, Create vhost scsi libvhost controller\n");
+    printf("  -t, Specify the vhost scsi target number\n");
+    printf("  -h, Display this help message\n");
+}
+
+#define PARSE_ARGS_EXIT(succ) \
+    print_usage();  \
+    exit(succ)
+
+int main(int argc, char** argv) {
+    struct libvhost_ctrl* ctrl;
+    char *socket_path = NULL;
+    int scsi = 0, target;
+    int ret = 0;
+    int opt;
+
+    while ((opt = getopt(argc, argv, "p:st:h")) != -1) {
+        switch (opt) {
+            case 'p':
+                socket_path = optarg;
+                break;
+            case 's':
+                scsi = 1;
+                break;
+            case 't':
+                target = atoi(optarg);
+                break;
+            case 'h':
+                PARSE_ARGS_EXIT(EXIT_SUCCESS);
+            case '?':
+                fprintf(stderr, "Unknown option `-%c'.\n", optopt);
+                PARSE_ARGS_EXIT(EXIT_FAILURE);
+            default:
+                PARSE_ARGS_EXIT(EXIT_FAILURE);
+        }
+    }
+    if (socket_path == NULL) {
+        fprintf(stderr, "Error: Socket path is required.\n");
+        PARSE_ARGS_EXIT(EXIT_FAILURE);
+    }
+
+    ctrl = scsi ? libvhost_scsi_ctrl_create(socket_path, target) :
+                  libvhost_ctrl_create(socket_path);
     if (!ctrl) {
-        goto fail_ctrl;
+        return 1;
     }
 
     if (!libvhost_ctrl_init_memory(ctrl, 1ULL << 30)) {
@@ -225,34 +315,13 @@ int main(int argc, char** argv) {
         goto fail_ctrl;
     }
 
-    ret = libvhost_ctrl_add_virtqueue(ctrl, 1024);
+    ret = libvhost_ctrl_add_virtqueue(ctrl, 4, 1024);
     if (ret != 0) {
         printf("libvhost_ctrl_add_virtqueue failed: %d\n", ret);
         goto fail_ctrl;
     }
-    // ret = vhost_ctrl_add_vq(conn, 32);
-    // if (ret != 0) {
-    //   printf("vhost_ctrl_add_vq failed: %d\n", ret);
-    //   return -1;
-    // }
 
-    // ret = test_sync_io(conn);
-    // if (ret != 0) {
-    //   printf("test_sync_io failed: %d\n", ret);
-    //   goto fail_conn;
-    // }
-
-    ret = test_sync_big_io(ctrl);
-    if (ret != 0) {
-        printf("test_sync_big_io failed: %d\n", ret);
-        goto fail_ctrl;
-    }
-
-    ret = test_discard(ctrl);
-    if (ret != 0) {
-        printf("test_discard failed: %d\n", ret);
-        goto fail_ctrl;
-    }
+    ret = scsi ? test_scsi(ctrl) : test_blk(ctrl);
 
 fail_ctrl:
     libvhost_ctrl_destroy(ctrl);
