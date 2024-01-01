@@ -17,12 +17,6 @@
 #include <string.h>
 #include <unistd.h>
 
-static int iovec_init(struct iovec* iov, void* buf, size_t len) {
-    iov->iov_base = buf;
-    iov->iov_len = len;
-    return 0;
-}
-
 static int blk_add_req(struct libvhost_virt_queue* vq, struct libvhost_virtio_blk_req* vbr, struct iovec* data_iovs,
                        int data_iovcnt, void* data) {
     int num_out = 0;
@@ -75,8 +69,4 @@ void blk_task_submit(struct libvhost_virt_queue* vq, struct libvhost_io_task* ta
     req->out_hdr.sector = task->offset >> 9;
     req->out_hdr.ioprio = 0;
     blk_add_req(vq, req, task->iovs, task->iovcnt, task);
-}
-
-int blk_task_getevents(struct libvhost_virt_queue* vq, struct libvhost_io_task** out_task) {
-    return virtqueue_get(vq, out_task);
 }

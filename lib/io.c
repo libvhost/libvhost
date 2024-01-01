@@ -7,13 +7,15 @@
  * This work is licensed under the terms of the GNU GPL, version 2 or later.
  * See the COPYING file in the top-level directory.
  */
-#include "utils.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <linux/virtio_blk.h>
+
 #include "libvhost.h"
 #include "libvhost_internal.h"
+#include "scsi.h"
+#include "utils.h"
 
 static char* get_virtio_task_status(int status) {
     switch (status) {
@@ -28,25 +30,75 @@ static char* get_virtio_task_status(int status) {
     }
 }
 
+#define SENSE_STRING(sense_key) \
+    case sense_key: \
+        return #sense_key
+
+static char* get_virtio_scsi_task_resp(struct virtio_scsi_cmd_resp* resp) {
+    if (resp->response == VIRTIO_SCSI_S_OK && resp->status == CDB_STATUS_GOOD) {
+        return "OK";
+    }
+    CHECK(resp->sense_len > 2);
+    switch (resp->sense[2] & SCSI_SENSE_KEY_MASK) {
+        SENSE_STRING(SCSI_SENSE_RECOVERED_ERROR);
+        SENSE_STRING(SCSI_SENSE_NOT_READY);
+        SENSE_STRING(SCSI_SENSE_MEDIUM_ERROR);
+        SENSE_STRING(SCSI_SENSE_HARDWARE_ERROR);
+        SENSE_STRING(SCSI_SENSE_ILLEGAL_REQUEST);
+        SENSE_STRING(SCSI_SENSE_UNIT_ATTENTION);
+        SENSE_STRING(SCSI_SENSE_DATA_PROTECT);
+        SENSE_STRING(SCSI_SENSE_BLANK_CHECK);
+        SENSE_STRING(SCSI_SENSE_VENDOR_SPECIFIC);
+        SENSE_STRING(SCSI_SENSE_COPY_ABORTED);
+        SENSE_STRING(SCSI_SENSE_ABORTED_COMMAND);
+        SENSE_STRING(SCSI_SENSE_VOLUME_OVERFLOW);
+        SENSE_STRING(SCSI_SENSE_MISCOMPARE);
+        default:
+            ERROR("UNKNOWN response: %d\n", resp->sense[2] & SCSI_SENSE_KEY_MASK);
+            return "UNKNOWN";
+    }
+}
+
 static int task_done(void* opaque) {
     struct libvhost_io_task* task = opaque;
+
     task->finished = true;
 
-    struct libvhost_virtio_blk_req* req = task->priv;
+    if (task->ctrl->type == DEVICE_TYPE_BLK) {
+        struct libvhost_virtio_blk_req* req = task->priv;
+        DEBUG("[TASK DONE] offset: 0x%" PRIx64
+            ", type: %d, iovcnt: %d, queue index: %d, used: %d, priv: %p status: "
+            "%s task: %p\n",
+            task->offset, task->type, task->iovcnt, task->q_idx, task->used, task->priv,
+            get_virtio_task_status(req->status), task);
+    } else if (task->ctrl->type == DEVICE_TYPE_SCSI) {
+        struct libvhost_virtio_scsi_req* req = task->priv;
+        DEBUG("[TASK DONE] offset: 0x%" PRIx64
+            ", type: %d, iovcnt: %d, queue index: %d, used: %d, priv: %p, "
+            "response: %s, task: %p\n",
+            task->offset, task->type, task->iovcnt, task->q_idx, task->used, task->priv,
+            get_virtio_scsi_task_resp(&req->resp), task);
+    }
 
-    DEBUG("[TASK DONE] offset: 0x%" PRIx64
-          ", type: %d, iovcnt: %d, queue index: %d, used: %d, priv: %p status: "
-          "%s task: %p\n",
-          task->offset, task->type, task->iovcnt, task->q_idx, task->used, task->priv,
-          get_virtio_task_status(req->status), task);
     return 0;
 }
 
+static int task_getevents(struct libvhost_virt_queue* vq, struct libvhost_io_task** out_task) {
+    return virtqueue_get(vq, out_task);
+}
+
 static int libvhost_readwritev(struct libvhost_ctrl* ctrl, int q_idx, uint64_t offset, struct iovec* iov, int iovcnt,
-                               bool write, bool async, void* opaque) {
+                               enum libvhost_io_type type, bool async, void* opaque) {
     struct libvhost_io_task* task;
     struct libvhost_io_task* out_task;
-    struct libvhost_virt_queue* vq = &ctrl->vqs[q_idx];
+    struct libvhost_virt_queue* vq;
+
+    if (ctrl->type == DEVICE_TYPE_SCSI) {
+        /* spdk use at least the 3rd vq for scsi */
+        q_idx = q_idx + 2;
+    }
+
+    vq = &ctrl->vqs[q_idx];
     task = virtring_get_free_task(vq);
     if (!task) {
         printf("NO MORE TASK\n");
@@ -62,18 +114,23 @@ static int libvhost_readwritev(struct libvhost_ctrl* ctrl, int q_idx, uint64_t o
     memcpy(task->iovs, iov, sizeof(struct iovec) * iovcnt);
     task->iovcnt = iovcnt;
     task->q_idx = q_idx;
-    if (write) {
-        task->type = VHOST_IO_WRITE;
+    task->type = type;
+
+    if (ctrl->type == DEVICE_TYPE_BLK) {
+        blk_task_submit(vq, task);
+    } else if (ctrl->type == DEVICE_TYPE_SCSI) {
+        scsi_task_submit(vq, task, iov->iov_len, ctrl->scsi_config->target);
     } else {
-        task->type = VHOST_IO_READ;
+        ERROR("UNKNOWN DEVICE TYPE\n");
+        return -1;
     }
-    blk_task_submit(vq, task);
+
     if (async) {
         return 0;
     }
 
     while (!task->finished) {
-        if (blk_task_getevents(vq, &out_task) == 0) {
+        if (task_getevents(vq, &out_task) == 0) {
             continue;
         }
         if (task != out_task) {
@@ -98,6 +155,7 @@ static int libvhost_discard_write_zeroes(struct libvhost_ctrl* ctrl, int q_idx,
         exit(EXIT_FAILURE);
         return -1;
     }
+    CHECK(type <= 4);
     CHECK(task->used == true);
     CHECK(task->finished == false);
     task->cb = task_done;
@@ -112,7 +170,7 @@ static int libvhost_discard_write_zeroes(struct libvhost_ctrl* ctrl, int q_idx,
     blk_task_submit(vq, task);
 
     while (!task->finished) {
-        if (blk_task_getevents(vq, &out_task) == 0) {
+        if (task_getevents(vq, &out_task) == 0) {
             continue;
         }
         if (task != out_task) {
@@ -150,25 +208,25 @@ int libvhost_write_zeroes(struct libvhost_ctrl* ctrl, int q_idx, uint64_t offset
 
 int libvhost_read(struct libvhost_ctrl* ctrl, int q_idx, uint64_t offset, char* buf, int len) {
     struct iovec iov = {.iov_base = buf, .iov_len = len};
-    return libvhost_readwritev(ctrl, q_idx, offset, &iov, 1, false, false, NULL);
+    return libvhost_readwritev(ctrl, q_idx, offset, &iov, 1, VHOST_IO_READ, false, NULL);
 }
 
 int libvhost_write(struct libvhost_ctrl* ctrl, int q_idx, uint64_t offset, char* buf, int len) {
     struct iovec iov = {.iov_base = buf, .iov_len = len};
-    return libvhost_readwritev(ctrl, q_idx, offset, &iov, 1, true, false, NULL);
+    return libvhost_readwritev(ctrl, q_idx, offset, &iov, 1, VHOST_IO_WRITE, false, NULL);
 }
 
 int libvhost_readv(struct libvhost_ctrl* ctrl, int q_idx, uint64_t offset, struct iovec* iov, int iovcnt) {
-    return libvhost_readwritev(ctrl, q_idx, offset, iov, iovcnt, false, false, NULL);
+    return libvhost_readwritev(ctrl, q_idx, offset, iov, iovcnt, VHOST_IO_READ, false, NULL);
 }
 
 int libvhost_writev(struct libvhost_ctrl* ctrl, int q_idx, uint64_t offset, struct iovec* iov, int iovcnt) {
-    return libvhost_readwritev(ctrl, q_idx, offset, iov, iovcnt, true, false, NULL);
+    return libvhost_readwritev(ctrl, q_idx, offset, iov, iovcnt, VHOST_IO_WRITE, false, NULL);
 }
 
 int libvhost_submit(struct libvhost_ctrl* ctrl, int q_idx, uint64_t offset, struct iovec* iov, int iovcnt, bool write,
                     void* opaque) {
-    return libvhost_readwritev(ctrl, q_idx, offset, iov, iovcnt, write, true, opaque);
+    return libvhost_readwritev(ctrl, q_idx, offset, iov, iovcnt, write ? VHOST_IO_WRITE : VHOST_IO_READ, true, opaque);
 }
 
 int libvhost_getevents(struct libvhost_ctrl* ctrl, int q_idx, int nr, VhostEvent* events) {
@@ -176,8 +234,11 @@ int libvhost_getevents(struct libvhost_ctrl* ctrl, int q_idx, int nr, VhostEvent
     int ret = 0;
     int i;
     struct libvhost_io_task* done_tasks[VIRTIO_MAX_IODEPTH];
+
+    q_idx = ctrl->type == DEVICE_TYPE_BLK ? q_idx : q_idx + 2;
+
     while (done < nr) {
-        ret = blk_task_getevents(&ctrl->vqs[q_idx], &done_tasks[done]);
+        ret = task_getevents(&ctrl->vqs[q_idx], &done_tasks[done]);
         if (ret == 0) {
             continue;
         }
@@ -187,8 +248,28 @@ int libvhost_getevents(struct libvhost_ctrl* ctrl, int q_idx, int nr, VhostEvent
     }
     for (i = 0; i < done; i++) {
         events[i].data = done_tasks[i]->opaque;
-        events[i].res = ((struct libvhost_virtio_blk_req*)done_tasks[i]->priv)->status;
+        events[i].res = (ctrl->type == DEVICE_TYPE_BLK ?
+                         ((struct libvhost_virtio_blk_req*)done_tasks[i]->priv)->status :
+                         ((struct libvhost_virtio_scsi_req*)done_tasks[i]->priv)->resp.status);
         virtring_free_task(done_tasks[i]);
     }
     return done;
+}
+
+void libvhost_scsi_read_capacity(struct libvhost_ctrl* ctrl) {
+    struct iovec iov;
+    char *rcap_buf = NULL;
+
+    rcap_buf = (char*)libvhost_malloc(ctrl, 8);
+    CHECK(rcap_buf);
+    memset(rcap_buf, 0, 8);
+
+    iov.iov_base = rcap_buf;
+    iov.iov_len = 8;
+    libvhost_readwritev(ctrl, 0, 0, &iov, 1, VHOST_IO_READ_CAPACITY, false, NULL);
+    ctrl->scsi_config->num_blocks = from_be32(rcap_buf) + 1;
+    ctrl->scsi_config->block_size = from_be32(rcap_buf + 4);
+
+    DEBUG("scsi device(%s) num blocks(%u), block size(%u)\n",
+          ctrl->sock_path, ctrl->scsi_config->num_blocks, ctrl->scsi_config->block_size);
 }

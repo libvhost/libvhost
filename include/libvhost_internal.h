@@ -11,11 +11,13 @@
 #define _VIRT_QUEUE_H_
 
 #include <linux/virtio_blk.h>
+#include <linux/virtio_scsi.h>
 #include <linux/virtio_ring.h>
 #include <stdbool.h>
 #include <sys/uio.h>
 #include <inttypes.h>
 
+#include "libvhost.h"
 #include "vhost_user_spec.h"
 
 #define rmb() __asm volatile("" ::: "memory")
@@ -28,6 +30,13 @@ struct vhost_inflight {
     uint64_t size;
     uint64_t offset;
     uint16_t queue_size;
+};
+
+struct libvhost_scsi_config {
+    struct virtio_scsi_config* config;
+    uint32_t num_blocks;
+    uint32_t block_size;
+    uint16_t target;
 };
 
 struct libvhost_ctrl {
@@ -43,10 +52,12 @@ struct libvhost_ctrl {
     struct vhost_inflight inflight;
     struct libvhost_mem* mem;
     bool stopped;
+    enum device_type type;
 
-    /* vritio_blk: struct virtio_blk_config */
-    /* virtio_scsi */
-    void* config;
+    union {
+        struct virtio_blk_config* blk_config;
+        struct libvhost_scsi_config* scsi_config;
+    };
 };
 
 enum libvhost_io_type {
@@ -55,6 +66,7 @@ enum libvhost_io_type {
     VHOST_IO_FLUSH,
     VHOST_IO_DISCARD,
     VHOST_IO_WRITE_ZEROES,
+    VHOST_IO_READ_CAPACITY,
 };
 
 typedef int (*VhostIOCB)(void* task);
@@ -111,7 +123,13 @@ struct libvhost_virtio_blk_req {
     uint8_t status;
 };
 
-void blk_task_submit(struct libvhost_virt_queue* vq, struct libvhost_io_task* task);
-int blk_task_getevents(struct libvhost_virt_queue* vq, struct libvhost_io_task** out_task);
+struct libvhost_virtio_scsi_req {
+    struct virtio_scsi_cmd_req out_hdr;
+    struct virtio_scsi_cmd_resp resp;
+};
 
+void blk_task_submit(struct libvhost_virt_queue* vq, struct libvhost_io_task* task);
+void scsi_task_submit(struct libvhost_virt_queue* vq, struct libvhost_io_task* task, uint32_t len, uint16_t target);
+
+void libvhost_scsi_read_capacity(struct libvhost_ctrl* ctrl);
 #endif

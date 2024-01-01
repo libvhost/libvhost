@@ -69,7 +69,7 @@ or receiving the in-band message VHOST_USER_VRING_KICK if negotiated, and stop
 ring upon receiving VHOST_USER_GET_VRING_BASE.
 
 */
-#define DEFUALT_VHOST_FEATURES                                                                       \
+#define DEFAULT_VHOST_FEATURES                                                                       \
     ((1ULL << VHOST_F_LOG_ALL) | (1ULL << VIRTIO_F_VERSION_1) | (1ULL << VIRTIO_F_NOTIFY_ON_EMPTY) | \
      (1ULL << VIRTIO_RING_F_EVENT_IDX) | (1ULL << VIRTIO_RING_F_INDIRECT_DESC)) |                    \
         (1ULL << VHOST_USER_F_PROTOCOL_FEATURES)
@@ -192,7 +192,7 @@ void* libvhost_malloc(struct libvhost_ctrl* ctrl, uint64_t size) { return buddy_
 void libvhost_free(struct libvhost_ctrl* ctrl, void* ptr) { buddy_free(ctrl->mem->buddy, ptr); }
 
 /* Controller Management */
-struct libvhost_ctrl* libvhost_ctrl_create(const char* path) {
+static struct libvhost_ctrl* libvhost_ctrl_create_common(const char* path) {
     struct libvhost_ctrl* ctrl = calloc(1, sizeof(struct libvhost_ctrl));
     if (!ctrl) {
         ERROR("calloc failed\n");
@@ -201,11 +201,37 @@ struct libvhost_ctrl* libvhost_ctrl_create(const char* path) {
     ctrl->stopped = false;
     ctrl->sock_path = strdup(path);
     // Set default features.
-    ctrl->features = DEFUALT_VHOST_FEATURES;
+    ctrl->features = DEFAULT_VHOST_FEATURES;
     ctrl->protocol_features = DEFAULT_VHOST_PROTOCOL_FEATURES;
     ctrl->vqs = calloc(LIBVHOST_USER_MAX_QUEUE_PAIRS, sizeof(struct libvhost_virt_queue));
+
+    return ctrl;
+}
+
+struct libvhost_ctrl* libvhost_ctrl_create(const char* path) {
+    struct libvhost_ctrl* ctrl = libvhost_ctrl_create_common(path);
+    if (!ctrl) {
+        return NULL;
+    }
+
+    ctrl->type = DEVICE_TYPE_BLK;
     ctrl->nr_vqs = 0;
-    ctrl->config = (void*)calloc(1, sizeof(struct virtio_blk_config));
+    ctrl->blk_config = calloc(1, sizeof(struct virtio_blk_config));
+    return ctrl;
+}
+
+struct libvhost_ctrl* libvhost_scsi_ctrl_create(const char* path, uint16_t target) {
+    struct libvhost_ctrl* ctrl = libvhost_ctrl_create_common(path);
+    if (!ctrl) {
+        return NULL;
+    }
+
+    ctrl->type = DEVICE_TYPE_SCSI;
+    // vhost-scsi has at lease control queue and event queue
+    ctrl->nr_vqs = 2;
+    ctrl->scsi_config = calloc(1, sizeof(struct libvhost_scsi_config));
+    ctrl->scsi_config->config = calloc(1, sizeof(struct virtio_scsi_config));
+    ctrl->scsi_config->target = target;
     return ctrl;
 }
 
@@ -232,7 +258,12 @@ void libvhost_ctrl_destroy(struct libvhost_ctrl* ctrl) {
     __ctrl_free_memory(ctrl);
     free(ctrl->sock_path);
     free(ctrl->vqs);
-    free(ctrl->config);
+    if (ctrl->type == DEVICE_TYPE_BLK) {
+        free(ctrl->blk_config);
+    } else {
+        free(ctrl->scsi_config->config);
+        free(ctrl->scsi_config);
+    }
     free(ctrl);
 }
 
@@ -360,46 +391,69 @@ static int negotiate_features(struct libvhost_ctrl* ctrl) {
 
 static int vhost_ctrl_get_config(struct libvhost_ctrl* ctrl) {
     struct libvhost_user_config config = {.size = sizeof(config.region)};
-    struct virtio_blk_config* cfg = ctrl->config;
 
     if (vhost_ioctl(ctrl, VHOST_USER_GET_CONFIG, &config) != 0) {
         ERROR("Unable to get vhost config\n");
         return -1;
     }
-    memcpy(cfg, &config.region, sizeof(struct virtio_blk_config));
 
-    /* Capacity unit is sector, not block.*/
-    DEBUG("[DEVICE INFO] capacity: %.3f GiB (%" PRIu64 ")\n", TO_GB(1.0 * cfg->capacity * 512), cfg->capacity * 512);
-    DEBUG("[DEVICE INFO] size_max: %" PRIu32 "\n", cfg->size_max);
-    DEBUG("[DEVICE INFO] seg_max: %" PRIu32 "\n", cfg->seg_max);
-    // DEBUG("[DEVICE INFO] cylinders: %" PRIu16 "\n", cfg->cylinders);
-    // DEBUG("[DEVICE INFO] heads: %" PRIu8 "\n", cfg->heads);
-    // DEBUG("[DEVICE INFO] sectors: %" PRIu8 "\n", cfg->sectors);
-    DEBUG("[DEVICE INFO] blk_size: %" PRIu32 "\n", cfg->blk_size);
-    DEBUG("[DEVICE INFO] physical_block_exp: %" PRIu8 "\n", cfg->physical_block_exp);
-    DEBUG("[DEVICE INFO] alignment_offset: %" PRIu8 "\n", cfg->alignment_offset);
-    DEBUG("[DEVICE INFO] min_io_size: %" PRIu16 "\n", cfg->min_io_size);
-    DEBUG("[DEVICE INFO] opt_io_size: %" PRIu32 "\n", cfg->opt_io_size);
-    DEBUG("[DEVICE INFO] wce: %" PRIu8 "\n", cfg->wce);
-    DEBUG("[DEVICE INFO] num_queues: %" PRIu16 "\n", cfg->num_queues);
-    DEBUG("[DEVICE INFO] max_discard_sectors: %" PRIu32 "\n", cfg->max_discard_sectors);
-    DEBUG("[DEVICE INFO] max_discard_seg: %" PRIu32 "\n", cfg->max_discard_seg);
-    DEBUG("[DEVICE INFO] discard_sector_alignment: %" PRIu32 "\n", cfg->discard_sector_alignment);
-    DEBUG("[DEVICE INFO] max_write_zeroes_sectors: %" PRIu32 "\n", cfg->max_write_zeroes_sectors);
-    DEBUG("[DEVICE INFO] max_write_zeroes_seg: %" PRIu32 "\n", cfg->max_write_zeroes_seg);
-    DEBUG("[DEVICE INFO] write_zeroes_may_unmap: %" PRIu8 "\n", cfg->write_zeroes_may_unmap);
+    if (ctrl->type == DEVICE_TYPE_BLK) {
+        struct virtio_blk_config* cfg = ctrl->blk_config;
+        memcpy(cfg, &config.region, sizeof(struct virtio_blk_config));
+
+        /* Capacity unit is sector, not block.*/
+        DEBUG("[DEVICE INFO] capacity: %.3f GiB (%" PRIu64 ")\n", TO_GB(1.0 * cfg->capacity * 512), cfg->capacity * 512);
+        DEBUG("[DEVICE INFO] size_max: %" PRIu32 "\n", cfg->size_max);
+        DEBUG("[DEVICE INFO] seg_max: %" PRIu32 "\n", cfg->seg_max);
+        // DEBUG("[DEVICE INFO] cylinders: %" PRIu16 "\n", cfg->cylinders);
+        // DEBUG("[DEVICE INFO] heads: %" PRIu8 "\n", cfg->heads);
+        // DEBUG("[DEVICE INFO] sectors: %" PRIu8 "\n", cfg->sectors);
+        DEBUG("[DEVICE INFO] blk_size: %" PRIu32 "\n", cfg->blk_size);
+        DEBUG("[DEVICE INFO] physical_block_exp: %" PRIu8 "\n", cfg->physical_block_exp);
+        DEBUG("[DEVICE INFO] alignment_offset: %" PRIu8 "\n", cfg->alignment_offset);
+        DEBUG("[DEVICE INFO] min_io_size: %" PRIu16 "\n", cfg->min_io_size);
+        DEBUG("[DEVICE INFO] opt_io_size: %" PRIu32 "\n", cfg->opt_io_size);
+        DEBUG("[DEVICE INFO] wce: %" PRIu8 "\n", cfg->wce);
+        DEBUG("[DEVICE INFO] num_queues: %" PRIu16 "\n", cfg->num_queues);
+        DEBUG("[DEVICE INFO] max_discard_sectors: %" PRIu32 "\n", cfg->max_discard_sectors);
+        DEBUG("[DEVICE INFO] max_discard_seg: %" PRIu32 "\n", cfg->max_discard_seg);
+        DEBUG("[DEVICE INFO] discard_sector_alignment: %" PRIu32 "\n", cfg->discard_sector_alignment);
+        DEBUG("[DEVICE INFO] max_write_zeroes_sectors: %" PRIu32 "\n", cfg->max_write_zeroes_sectors);
+        DEBUG("[DEVICE INFO] max_write_zeroes_seg: %" PRIu32 "\n", cfg->max_write_zeroes_seg);
+        DEBUG("[DEVICE INFO] write_zeroes_may_unmap: %" PRIu8 "\n", cfg->write_zeroes_may_unmap);
+    } else if (ctrl->type == DEVICE_TYPE_SCSI) {
+        struct virtio_scsi_config* cfg = ctrl->scsi_config->config;
+        memcpy(cfg, &config.region, sizeof(struct virtio_scsi_config));
+
+        DEBUG("[DEVICE INFO] num_queues: %" PRIu32 "\n", cfg->num_queues);
+        DEBUG("[DEVICE INFO] seg_max: %" PRIu32 "\n", cfg->seg_max);
+        DEBUG("[DEVICE INFO] max_sectors: %" PRIu32 "\n", cfg->max_sectors);
+        DEBUG("[DEVICE INFO] cmd_per_lun: %" PRIu32 "\n", cfg->cmd_per_lun);
+        DEBUG("[DEVICE INFO] cdb_size: %" PRIu32 "\n", cfg->cdb_size);
+        DEBUG("[DEVICE INFO] max_target: %" PRIu32 "\n", cfg->max_target);
+        DEBUG("[DEVICE INFO] max_lun: %" PRIu32 "\n", cfg->max_lun);
+    } else {
+        return -1;
+    }
 
     return 0;
 }
 
 uint64_t libvhost_ctrl_get_blocksize(struct libvhost_ctrl* ctrl) {
-    return ((struct virtio_blk_config*)ctrl->config)->blk_size;
+    if (ctrl->type == DEVICE_TYPE_BLK) {
+        return ctrl->blk_config->blk_size;
+    } else {
+        return ctrl->scsi_config->block_size;
+    }
 }
 
 int libvhost_ctrl_get_numblocks(struct libvhost_ctrl* ctrl) {
-    CHECK(((struct virtio_blk_config*)ctrl->config)->blk_size != 0);
-    return ((struct virtio_blk_config*)ctrl->config)->capacity * 512 /
-           ((struct virtio_blk_config*)ctrl->config)->blk_size;
+    if (ctrl->type == DEVICE_TYPE_BLK) {
+        CHECK(ctrl->blk_config->blk_size != 0);
+        return ctrl->blk_config->capacity * 512 / ctrl->blk_config->blk_size;
+    } else {
+        return ctrl->scsi_config->num_blocks;
+    }
 }
 
 static int libvhost_reconnect(struct libvhost_ctrl* ctrl) {
@@ -549,9 +603,11 @@ static int setup_inflight(struct libvhost_virt_queue* vq) {
 static int vhost_enable_vq(struct libvhost_ctrl* ctrl, struct libvhost_virt_queue* vq) {
     VhostVringState state;
 
-    if (setup_inflight(vq) != 0) {
-        ERROR("Unable to setup inflight\n");
-        return -1;
+    if (vq->idx == 0) {
+        if (setup_inflight(vq) != 0) {
+            ERROR("Unable to setup inflight\n");
+            return -1;
+        }
     }
 
     state.index = vq->idx;
@@ -610,10 +666,28 @@ static int vhost_enable_vq(struct libvhost_ctrl* ctrl, struct libvhost_virt_queu
     return 0;
 }
 
-int libvhost_ctrl_add_virtqueue(struct libvhost_ctrl* ctrl, int size) {
-    struct libvhost_virt_queue* vq = &ctrl->vqs[ctrl->nr_vqs++];
-    vq->idx = ctrl->nr_vqs - 1;
-    vq->size = size;
-    vhost_vq_init(vq, ctrl);
-    return vhost_enable_vq(ctrl, vq);
+int libvhost_ctrl_add_virtqueue(struct libvhost_ctrl* ctrl, int num_io_queues, int size) {
+    int ret;
+
+    if (ctrl->nr_vqs + num_io_queues > LIBVHOST_USER_MAX_QUEUE_PAIRS) {
+        ERROR("Maximum number of queues exceeded\n");
+        return -1;
+    }
+    ctrl->nr_vqs += num_io_queues;
+
+    for (int i = 0; i < ctrl->nr_vqs; i++) {
+        struct libvhost_virt_queue* vq = &ctrl->vqs[i];
+        vq->idx = i;
+        vq->size = size;
+        vhost_vq_init(vq, ctrl);
+        if ((ret = vhost_enable_vq(ctrl, vq)) != 0) {
+            return ret;
+        }
+    }
+
+    // get device capacity in advance for libvhost scsi ctrl
+    if (ctrl->type == DEVICE_TYPE_SCSI) {
+        libvhost_scsi_read_capacity(ctrl);
+    }
+    return 0;
 }
