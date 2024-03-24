@@ -509,13 +509,10 @@ static void* reconnect_thread_worker(void* arg) {
             return NULL;
         }
         if (ret == 0) {
-            DEBUG("epoll_wait timeout.\n");
             continue;
         }
-        INFO("epoll_wait got event fd: %d ctrl sock: %d, events: %d\n", event.data.fd, ctrl->sock, event.events);
         if (event.data.fd == ctrl->sock) {
             if ((event.events & EPOLLRDHUP) || (event.events & EPOLLHUP)) {
-                WARN("epoll events: %d\n", event.events);
                 ret = epoll_ctl(ctrl->epollfd, EPOLL_CTL_DEL, ctrl->sock, NULL);
                 if (ret == -1) {
                     ERROR("epoll_ctl failed: %s\n", strerror(errno));
