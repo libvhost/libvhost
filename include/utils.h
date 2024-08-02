@@ -14,8 +14,10 @@
 extern "C" {
 #endif
 
-#include <stdio.h>
 #include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>  // For getenv
+#include <string.h>  // For strcmp
 #include <sys/uio.h>
 
 #define CHECK(cond)                                                      \
@@ -34,15 +36,63 @@ enum LOG_LEVEL {
     LOG_LEVEL_FATAL,
 };
 
-#ifndef NDEBUG
-#define DEBUG(...) __vhost_log(LOG_LEVEL_DEBUG, __FILE__, __LINE__, __func__, __VA_ARGS__)
-#else
-#define DEBUG(...)
-#endif
-#define INFO(...) __vhost_log(LOG_LEVEL_INFO, __FILE__, __LINE__, __func__, __VA_ARGS__)
-#define WARN(...) __vhost_log(LOG_LEVEL_WARN, __FILE__, __LINE__, __func__, __VA_ARGS__)
-#define ERROR(...) __vhost_log(LOG_LEVEL_ERROR, __FILE__, __LINE__, __func__, __VA_ARGS__)
-#define FALTA(...) __vhost_log(LOG_LEVEL_FATAL, __FILE__, __LINE__, __func__, __VA_ARGS__)
+// Function to determine if logging should occur based on log level
+static inline int should_log(enum LOG_LEVEL level) {
+    static enum LOG_LEVEL env_level = -1;  // Cache for environment log level priority
+
+    // Check if the environment log level has been cached
+    if (env_level == -1) {
+        // Initialize log level priorities and default to INFO level if not set
+        const char *log_level_env = getenv("LOG_LEVEL");
+        if (log_level_env == NULL) {
+            env_level = LOG_LEVEL_INFO;  // Default to INFO if environment variable is not set
+        } else {
+            // Determine the priority of the environment log level
+            if (strcmp(log_level_env, "DEBUG") == 0) {
+                env_level = LOG_LEVEL_DEBUG;
+            } else if (strcmp(log_level_env, "INFO") == 0) {
+                env_level = LOG_LEVEL_INFO;
+            } else if (strcmp(log_level_env, "WARN") == 0) {
+                env_level = LOG_LEVEL_WARN;
+            } else if (strcmp(log_level_env, "ERROR") == 0) {
+                env_level = LOG_LEVEL_ERROR;
+            } else if (strcmp(log_level_env, "FATAL") == 0) {
+                env_level = LOG_LEVEL_FATAL;
+            } else {
+                env_level = LOG_LEVEL_INFO;  // Default to INFO if the value is invalid
+            }
+        }
+    }
+
+    // Check if the current log level should be logged based on priority
+    return level >= env_level;
+}
+
+// Logging macros
+#define DEBUG(...)                                                                                                \
+    do {                                                                                                          \
+        if (should_log(LOG_LEVEL_DEBUG)) __vhost_log(LOG_LEVEL_DEBUG, __FILE__, __LINE__, __func__, __VA_ARGS__); \
+    } while (0)
+
+#define INFO(...)                                                                                               \
+    do {                                                                                                        \
+        if (should_log(LOG_LEVEL_INFO)) __vhost_log(LOG_LEVEL_INFO, __FILE__, __LINE__, __func__, __VA_ARGS__); \
+    } while (0)
+
+#define WARN(...)                                                                                               \
+    do {                                                                                                        \
+        if (should_log(LOG_LEVEL_WARN)) __vhost_log(LOG_LEVEL_WARN, __FILE__, __LINE__, __func__, __VA_ARGS__); \
+    } while (0)
+
+#define ERROR(...)                                                                                                \
+    do {                                                                                                          \
+        if (should_log(LOG_LEVEL_ERROR)) __vhost_log(LOG_LEVEL_ERROR, __FILE__, __LINE__, __func__, __VA_ARGS__); \
+    } while (0)
+
+#define FATAL(...)                                                                                                \
+    do {                                                                                                          \
+        if (should_log(LOG_LEVEL_FATAL)) __vhost_log(LOG_LEVEL_FATAL, __FILE__, __LINE__, __func__, __VA_ARGS__); \
+    } while (0)
 
 void DumpHex(const void* data, size_t size);
 

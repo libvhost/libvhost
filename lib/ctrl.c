@@ -489,7 +489,7 @@ static void* reconnect_thread_worker(void* arg) {
     struct libvhost_ctrl* ctrl = arg;
     struct epoll_event event;
     int ret;
-    INFO("Start the reconnect thread.\n");
+    DEBUG("Start the reconnect thread.\n");
     ctrl->epollfd = epoll_create1(0);
     if (ctrl->epollfd == -1) {
         ERROR("epoll_create1 failed: %s\n", strerror(errno));
@@ -522,7 +522,7 @@ static void* reconnect_thread_worker(void* arg) {
             }
         }
     }
-    INFO("Stop the reconnect thread.\n");
+    DEBUG("Stop the reconnect thread.\n");
     return NULL;
 }
 
