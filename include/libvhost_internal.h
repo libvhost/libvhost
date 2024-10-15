@@ -20,8 +20,13 @@
 #include "libvhost.h"
 #include "vhost_user_spec.h"
 
+#if defined(__x86_64__)
 #define rmb() __asm volatile("" ::: "memory")
 #define wmb() __asm volatile("" ::: "memory")
+#else
+#define rmb() asm volatile("dmb ishld" : : : "memory")
+#define wmb() asm volatile("dmb ishst" : : : "memory")
+#endif
 
 #define VIRTIO_MAX_IODEPTH 256
 struct vhost_inflight {
