@@ -232,10 +232,14 @@ int libvhost_submit(struct libvhost_ctrl* ctrl, int q_idx, uint64_t offset, stru
 int libvhost_getevents(struct libvhost_ctrl* ctrl, int q_idx, int nr, VhostEvent* events) {
     int done = 0;
     int ret = 0;
+    int q_size = 0;
     int i;
-    struct libvhost_io_task* done_tasks[VIRTIO_MAX_IODEPTH];
+    struct libvhost_io_task** done_tasks;
 
     q_idx = ctrl->type == DEVICE_TYPE_BLK ? q_idx : q_idx + 2;
+    q_size = ctrl->vqs[q_idx].size;
+    done_tasks = ctrl->vqs[q_idx].done_tasks;
+    memset(done_tasks, 0, q_size * sizeof(struct libvhost_io_task*));
 
     while (done < nr) {
         ret = task_getevents(&ctrl->vqs[q_idx], &done_tasks[done]);

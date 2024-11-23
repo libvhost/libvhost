@@ -255,6 +255,9 @@ void libvhost_ctrl_destroy(struct libvhost_ctrl* ctrl) {
         pthread_join(ctrl->thread, NULL);
     }
     close(ctrl->sock);
+    for (int i = 0; i < ctrl->nr_vqs; ++i) {
+        vring_free_state_extra(&ctrl->vqs[i]);
+    }
     __ctrl_free_memory(ctrl);
     free(ctrl->sock_path);
     free(ctrl->vqs);
@@ -677,6 +680,9 @@ int libvhost_ctrl_add_virtqueue(struct libvhost_ctrl* ctrl, int num_io_queues, i
         vq->idx = i;
         vq->size = size;
         vhost_vq_init(vq, ctrl);
+        if ((ret = vring_alloc_state_extra(vq)) != 0) {
+            return ret;
+        }
         if ((ret = vhost_enable_vq(ctrl, vq)) != 0) {
             return ret;
         }

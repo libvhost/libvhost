@@ -28,7 +28,6 @@
 #define wmb() asm volatile("dmb ishst" : : : "memory")
 #endif
 
-#define VIRTIO_MAX_IODEPTH 256
 struct vhost_inflight {
     int fd;
     void* addr;
@@ -107,10 +106,13 @@ struct libvhost_virt_queue {
     uint16_t free_head;
     uint16_t num_free;
 
-    struct libvhost_io_task tasks[VIRTIO_MAX_IODEPTH];
-    void* desc_state[VIRTIO_MAX_IODEPTH];
+    struct libvhost_io_task *tasks;
+    void **desc_state;
+    struct libvhost_io_task **done_tasks;
 };
 
+int vring_alloc_state_extra(struct libvhost_virt_queue* vq);
+void vring_free_state_extra(struct libvhost_virt_queue* vq);
 void vhost_vq_init(struct libvhost_virt_queue* vq, struct libvhost_ctrl* ctrl);
 void virtring_add(struct libvhost_virt_queue* vq, struct iovec* iovec, int num_out, int num_in, void* data);
 struct libvhost_io_task* virtring_get_free_task(struct libvhost_virt_queue* vq);

@@ -22,6 +22,48 @@
 
 #define VIRTIO_PCI_VRING_ALIGN 4096
 
+int vring_alloc_state_extra(struct libvhost_virt_queue* vq) {
+    int size = vq->size;
+    struct libvhost_io_task *tasks = NULL;
+    struct libvhost_io_task **done_tasks = NULL;
+    void **desc_state = NULL;
+
+    tasks = libvhost_malloc(vq->ctrl, size * sizeof(struct libvhost_io_task));
+    if (!tasks) {
+        ERROR("malloc for vq->tasks failed\n");
+        return -1;
+    }
+
+    desc_state = libvhost_malloc(vq->ctrl, size * sizeof(void*));
+    if (!desc_state) {
+        ERROR("malloc for vq->desc_state failed\n");
+        libvhost_free(vq->ctrl, tasks);
+        return -1;
+    }
+
+    done_tasks = libvhost_malloc(vq->ctrl, size * sizeof(void*));
+    if (!done_tasks) {
+        ERROR("malloc for vq->done_tasks failed\n");
+        return -1;
+    }
+
+    memset(tasks, 0, size * sizeof(struct libvhost_io_task));
+    memset(desc_state, 0, size * sizeof(void*));
+    memset(done_tasks, 0, size * sizeof(void*));
+
+    vq->tasks = tasks;
+    vq->desc_state = desc_state;
+    vq->done_tasks = done_tasks;
+
+    return 0;
+}
+
+void vring_free_state_extra(struct libvhost_virt_queue* vq) {
+    libvhost_free(vq->ctrl, vq->done_tasks);
+    libvhost_free(vq->ctrl, vq->desc_state);
+    libvhost_free(vq->ctrl, vq->tasks);
+}
+
 void vhost_vq_init(struct libvhost_virt_queue* vq, struct libvhost_ctrl* ctrl) {
     uint64_t desc_table_len;
     uint64_t avail_table_len;
@@ -185,7 +227,7 @@ int virtqueue_get(struct libvhost_virt_queue* vq, struct libvhost_io_task** out_
 
 struct libvhost_io_task* virtring_get_free_task(struct libvhost_virt_queue* vq) {
     int i;
-    for (i = 0; i < sizeof(vq->tasks) / sizeof(vq->tasks[0]); ++i) {
+    for (i = 0; i < vq->size; ++i) {
         struct libvhost_io_task* task = &vq->tasks[i];
         if (!task->used) {
             task->used = true;
