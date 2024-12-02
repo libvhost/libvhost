@@ -29,7 +29,6 @@ void vhost_vq_init(struct libvhost_virt_queue* vq, struct libvhost_ctrl* ctrl) {
     uint64_t total_size;
     uint64_t size_aligned;
     void* q_mem;
-    void* q_mem_align;
     int i;
 
     CHECK(ctrl);
@@ -38,6 +37,8 @@ void vhost_vq_init(struct libvhost_virt_queue* vq, struct libvhost_ctrl* ctrl) {
 
     vq->kickfd = eventfd(0, EFD_CLOEXEC | EFD_NONBLOCK);
     vq->callfd = eventfd(0, EFD_CLOEXEC | EFD_NONBLOCK);
+
+    vq->desc_state = calloc(sizeof(void*), vq->size);
 
     size_aligned = vring_size(vq->size, VIRTIO_PCI_VRING_ALIGN);
     q_mem = libvhost_malloc(ctrl, size_aligned);
@@ -49,6 +50,13 @@ void vhost_vq_init(struct libvhost_virt_queue* vq, struct libvhost_ctrl* ctrl) {
         vq->vring.desc[i].next = i + 1;
     }
     vq->vring.desc[i].next = 0;
+}
+
+
+void vhost_vq_free(struct libvhost_virt_queue* vq) {
+    free(vq->desc_state);
+    close(vq->kickfd);
+    close(vq->callfd);
 }
 
 static void virtio_get_flags_name(uint16_t flags, char name[16]) {

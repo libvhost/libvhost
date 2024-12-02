@@ -249,6 +249,8 @@ static void __ctrl_free_memory(struct libvhost_ctrl* ctrl) {
 }
 
 void libvhost_ctrl_destroy(struct libvhost_ctrl* ctrl) {
+    int i;
+
     // TODO: use load and store to make it thread safe.
     ctrl->stopped = true;
     if (ctrl->thread) {
@@ -257,6 +259,9 @@ void libvhost_ctrl_destroy(struct libvhost_ctrl* ctrl) {
     close(ctrl->sock);
     __ctrl_free_memory(ctrl);
     free(ctrl->sock_path);
+    for (i = 0; i < ctrl->nr_vqs; ++i){
+        vhost_vq_free(&ctrl->vqs[i]);
+    }
     free(ctrl->vqs);
     if (ctrl->type == DEVICE_TYPE_BLK) {
         free(ctrl->blk_config);
