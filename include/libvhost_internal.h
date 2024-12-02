@@ -108,10 +108,11 @@ struct libvhost_virt_queue {
     uint16_t num_free;
 
     struct libvhost_io_task tasks[VIRTIO_MAX_IODEPTH];
-    void* desc_state[VIRTIO_MAX_IODEPTH];
+    void** desc_state;
 };
 
 void vhost_vq_init(struct libvhost_virt_queue* vq, struct libvhost_ctrl* ctrl);
+void vhost_vq_free(struct libvhost_virt_queue* vq);
 void virtring_add(struct libvhost_virt_queue* vq, struct iovec* iovec, int num_out, int num_in, void* data);
 struct libvhost_io_task* virtring_get_free_task(struct libvhost_virt_queue* vq);
 void virtring_free_task(struct libvhost_io_task* task);
