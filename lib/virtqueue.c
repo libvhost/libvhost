@@ -50,13 +50,28 @@ void vhost_vq_init(struct libvhost_virt_queue* vq, struct libvhost_ctrl* ctrl) {
         vq->vring.desc[i].next = i + 1;
     }
     vq->vring.desc[i].next = 0;
+
+    vq->free_list.next = NULL;
+    for (i = 0; i < vq->size; ++i) {
+        struct libvhost_io_task* task = calloc(1, sizeof(*task));
+        task->next = vq->free_list.next;
+        vq->free_list.next = task;
+    }
 }
 
 
 void vhost_vq_free(struct libvhost_virt_queue* vq) {
+    int i;
     free(vq->desc_state);
     close(vq->kickfd);
     close(vq->callfd);
+
+    struct libvhost_io_task* task = vq->free_list.next;
+    while(task) {
+        struct libvhost_io_task* next = task->next;
+        free(task);
+        task = next;
+    }
 }
 
 static void virtio_get_flags_name(uint16_t flags, char name[16]) {
@@ -180,8 +195,8 @@ int virtqueue_get(struct libvhost_virt_queue* vq, struct libvhost_io_task** out_
     vq->desc_state[id] = NULL;
     DEBUG(
         "[VIRTIO] USED RING last_used_idx: %d, last_used: %d, req id: %d len: "
-        "%d task: %p used: %d\n",
-        vq->last_used_idx, last_used, id, len, task, task->used);
+        "%d task: %p\n",
+        vq->last_used_idx, last_used, id, len, task);
     task->cb(task);
 
     reset_desc(vq, id);
@@ -191,23 +206,23 @@ int virtqueue_get(struct libvhost_virt_queue* vq, struct libvhost_io_task** out_
     return 1;
 }
 
-struct libvhost_io_task* virtring_get_free_task(struct libvhost_virt_queue* vq) {
-    int i;
-    for (i = 0; i < sizeof(vq->tasks) / sizeof(vq->tasks[0]); ++i) {
-        struct libvhost_io_task* task = &vq->tasks[i];
-        if (!task->used) {
-            task->used = true;
-            task->ctrl = vq->ctrl;
-            DEBUG("get free task: %p, id: %d\n", task, i);
-            return task;
-        }
+struct libvhost_io_task* virtqueue_get_task(struct libvhost_virt_queue* vq) {
+    struct libvhost_io_task* task = vq->free_list.next;
+    if (task) {
+        vq->free_list.next = task->next;
+        memset(task, 0, sizeof(*task));
+        task->vq = vq;
+        return task;
     }
     return NULL;
 }
 
-void virtring_free_task(struct libvhost_io_task* task) {
-    libvhost_free(task->ctrl, task->priv);
-    memset(task, 0, sizeof(*task));
+void virtqueue_free_task(struct libvhost_io_task* task) {
+    struct libvhost_virt_queue* vq = task->vq;
+    struct libvhost_ctrl* ctrl = vq->ctrl;
+    libvhost_free(ctrl, task->priv);
+    task->next = vq->free_list.next;
+    vq->free_list.next = task;
     // printf("xxx free task: %p\n", task);
 }
 

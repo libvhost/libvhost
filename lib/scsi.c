@@ -53,7 +53,7 @@ static int scsi_add_req(struct libvhost_virt_queue* vq, struct libvhost_virtio_s
 }
 
 void scsi_task_submit(struct libvhost_virt_queue* vq, struct libvhost_io_task* task, uint32_t len, uint16_t target) {
-    struct libvhost_virtio_scsi_req* req = libvhost_malloc(task->ctrl, sizeof(struct libvhost_virtio_scsi_req));
+    struct libvhost_virtio_scsi_req* req = libvhost_malloc(task->vq->ctrl, sizeof(struct libvhost_virtio_scsi_req));
     bool is_write;
 
     task->priv = req;

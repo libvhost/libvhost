@@ -64,19 +64,19 @@ static int task_done(void* opaque) {
 
     task->finished = true;
 
-    if (task->ctrl->type == DEVICE_TYPE_BLK) {
+    if (task->vq->ctrl->type == DEVICE_TYPE_BLK) {
         struct libvhost_virtio_blk_req* req = task->priv;
         DEBUG("[TASK DONE] offset: 0x%" PRIx64
-            ", type: %d, iovcnt: %d, queue index: %d, used: %d, priv: %p status: "
+            ", type: %d, iovcnt: %d, queue index: %d, priv: %p status: "
             "%s task: %p\n",
-            task->offset, task->type, task->iovcnt, task->q_idx, task->used, task->priv,
+            task->offset, task->type, task->iovcnt, task->q_idx, task->priv,
             get_virtio_task_status(req->status), task);
-    } else if (task->ctrl->type == DEVICE_TYPE_SCSI) {
+    } else if (task->vq->ctrl->type == DEVICE_TYPE_SCSI) {
         struct libvhost_virtio_scsi_req* req = task->priv;
         DEBUG("[TASK DONE] offset: 0x%" PRIx64
-            ", type: %d, iovcnt: %d, queue index: %d, used: %d, priv: %p, "
+            ", type: %d, iovcnt: %d, queue index: %d, priv: %p, "
             "response: %s, task: %p\n",
-            task->offset, task->type, task->iovcnt, task->q_idx, task->used, task->priv,
+            task->offset, task->type, task->iovcnt, task->q_idx, task->priv,
             get_virtio_scsi_task_resp(&req->resp), task);
     }
 
@@ -99,13 +99,12 @@ static int libvhost_readwritev(struct libvhost_ctrl* ctrl, int q_idx, uint64_t o
     }
 
     vq = &ctrl->vqs[q_idx];
-    task = virtring_get_free_task(vq);
+    task = virtqueue_get_task(vq);
     if (!task) {
         printf("NO MORE TASK\n");
         exit(EXIT_FAILURE);
         return -1;
     }
-    CHECK(task->used == true);
     CHECK(task->finished == false);
     task->cb = task_done;
     task->opaque = opaque;
@@ -134,11 +133,11 @@ static int libvhost_readwritev(struct libvhost_ctrl* ctrl, int q_idx, uint64_t o
             continue;
         }
         if (task != out_task) {
-            virtring_free_task(out_task);
+            virtqueue_free_task(out_task);
             printf("[WARN] io is out-of-order, task: %p, out_task: %p\n", task, out_task);
         }
     }
-    virtring_free_task(task);
+    virtqueue_free_task(task);
     return 0;
 }
 
@@ -149,14 +148,13 @@ static int libvhost_discard_write_zeroes(struct libvhost_ctrl* ctrl, int q_idx,
     struct libvhost_io_task* task;
     struct libvhost_io_task* out_task;
     struct libvhost_virt_queue* vq = &ctrl->vqs[q_idx];
-    task = virtring_get_free_task(vq);
+    task = virtqueue_get_task(vq);
     if (!task) {
         printf("NO MORE TASK\n");
         exit(EXIT_FAILURE);
         return -1;
     }
     CHECK(type <= 4);
-    CHECK(task->used == true);
     CHECK(task->finished == false);
     task->cb = task_done;
     task->opaque = opaque;
@@ -174,11 +172,11 @@ static int libvhost_discard_write_zeroes(struct libvhost_ctrl* ctrl, int q_idx,
             continue;
         }
         if (task != out_task) {
-            virtring_free_task(out_task);
+            virtqueue_free_task(out_task);
             printf("[WARN] io is out-of-order, task: %p, out_task: %p\n", task, out_task);
         }
     }
-    virtring_free_task(task);
+    virtqueue_free_task(task);
     return 0;
 }
 
@@ -243,7 +241,6 @@ int libvhost_getevents(struct libvhost_ctrl* ctrl, int q_idx, int nr, VhostEvent
             continue;
         }
         done += ret;
-        CHECK(done_tasks[done - 1]->used == true);
         CHECK(done_tasks[done - 1]->finished == true);
     }
     for (i = 0; i < done; i++) {
@@ -251,7 +248,7 @@ int libvhost_getevents(struct libvhost_ctrl* ctrl, int q_idx, int nr, VhostEvent
         events[i].res = (ctrl->type == DEVICE_TYPE_BLK ?
                          ((struct libvhost_virtio_blk_req*)done_tasks[i]->priv)->status :
                          ((struct libvhost_virtio_scsi_req*)done_tasks[i]->priv)->resp.status);
-        virtring_free_task(done_tasks[i]);
+        virtqueue_free_task(done_tasks[i]);
     }
     return done;
 }

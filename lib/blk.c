@@ -47,7 +47,7 @@ static int blk_add_req(struct libvhost_virt_queue* vq, struct libvhost_virtio_bl
 }
 
 void blk_task_submit(struct libvhost_virt_queue* vq, struct libvhost_io_task* task) {
-    struct libvhost_virtio_blk_req* req = libvhost_malloc(task->ctrl, sizeof(struct libvhost_virtio_blk_req));
+    struct libvhost_virtio_blk_req* req = libvhost_malloc(task->vq->ctrl, sizeof(struct libvhost_virtio_blk_req));
     task->priv = req;
     switch (task->type) {
         case VHOST_IO_WRITE:

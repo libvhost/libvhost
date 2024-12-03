@@ -76,13 +76,12 @@ enum libvhost_io_type {
 
 typedef int (*VhostIOCB)(void* task);
 struct libvhost_io_task {
-    struct libvhost_ctrl* ctrl;
+    struct libvhost_virt_queue* vq;
     uint64_t offset;  // align to sector size.
     enum libvhost_io_type type;
     struct iovec iovs[128];
     int iovcnt;
     int q_idx;
-    bool used;
     VhostIOCB cb;
 
     // struct libvhost_virtio_blk_req or SCSIReq;
@@ -91,6 +90,8 @@ struct libvhost_io_task {
 
     // user data.
     void* opaque;
+
+    struct libvhost_io_task* next;
 };
 
 struct libvhost_virt_queue {
@@ -107,15 +108,15 @@ struct libvhost_virt_queue {
     uint16_t free_head;
     uint16_t num_free;
 
-    struct libvhost_io_task tasks[VIRTIO_MAX_IODEPTH];
+    struct libvhost_io_task free_list;
     void** desc_state;
 };
 
 void vhost_vq_init(struct libvhost_virt_queue* vq, struct libvhost_ctrl* ctrl);
 void vhost_vq_free(struct libvhost_virt_queue* vq);
 void virtring_add(struct libvhost_virt_queue* vq, struct iovec* iovec, int num_out, int num_in, void* data);
-struct libvhost_io_task* virtring_get_free_task(struct libvhost_virt_queue* vq);
-void virtring_free_task(struct libvhost_io_task* task);
+struct libvhost_io_task* virtqueue_get_task(struct libvhost_virt_queue* vq);
+void virtqueue_free_task(struct libvhost_io_task* task);
 
 void virtqueue_kick(struct libvhost_virt_queue* vq);
 int virtqueue_get(struct libvhost_virt_queue* vq, struct libvhost_io_task** out_task);
