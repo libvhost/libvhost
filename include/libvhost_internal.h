@@ -86,7 +86,6 @@ struct libvhost_io_task {
 
     // struct libvhost_virtio_blk_req or SCSIReq;
     void* priv;
-    bool finished;
 
     // user data.
     void* opaque;
@@ -119,7 +118,7 @@ struct libvhost_io_task* virtqueue_get_task(struct libvhost_virt_queue* vq);
 void virtqueue_free_task(struct libvhost_io_task* task);
 
 void virtqueue_kick(struct libvhost_virt_queue* vq);
-int virtqueue_get(struct libvhost_virt_queue* vq, struct libvhost_io_task** out_task);
+int virtqueue_get(struct libvhost_virt_queue* vq, VhostEvent* event);
 
 int libvhost_mem_get_memory_fds(struct libvhost_ctrl* ctrl, int* fds, int* size);
 

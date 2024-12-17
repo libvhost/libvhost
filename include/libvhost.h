@@ -47,16 +47,18 @@ typedef struct VhostEvent {
     int res;
 } VhostEvent;
 
+/* sync io, couldn't use with async io. */
 int libvhost_read(struct libvhost_ctrl* ctrl, int q_idx, uint64_t offset, char* buf, int len);
 int libvhost_write(struct libvhost_ctrl* ctrl, int q_idx, uint64_t offset, char* buf, int len);
 int libvhost_discard(struct libvhost_ctrl* ctrl, int q_idx, uint64_t offset, int len);
 int libvhost_write_zeroes(struct libvhost_ctrl* ctrl, int q_idx, uint64_t offset, int len, bool unmap);
 int libvhost_readv(struct libvhost_ctrl* ctrl, int q_idx, uint64_t offset, struct iovec* iov, int iovcnt);
 int libvhost_writev(struct libvhost_ctrl* ctrl, int q_idx, uint64_t offset, struct iovec* iov, int iovcnt);
+
+/* async io, couldn't use with sync io*/
 int libvhost_submit(struct libvhost_ctrl* ctrl, int q_idx, uint64_t offset, struct iovec* iov, int iovcnt, bool write,
                     void* opaque);
-
-int libvhost_getevents(struct libvhost_ctrl* ctrl, int q_idx, int nr, VhostEvent* events);
+int libvhost_getevents(struct libvhost_ctrl* ctrl, int q_idx, int min, int nr, VhostEvent* events);
 
 void* libvhost_malloc(struct libvhost_ctrl* ctrl, uint64_t size);
 void libvhost_free(struct libvhost_ctrl* ctrl, void* ptr);

@@ -173,11 +173,11 @@ int test_async_io(struct libvhost_ctrl* ctrl) {
             random_buf(w_iov[idx].buf, buf_size);
             libvhost_submit(ctrl, 0, (round * depth + idx) << 10, &w_iov[idx].iov, 1, true, NULL);
         }
-        libvhost_getevents(ctrl, 0, depth, events);
+        libvhost_getevents(ctrl, 0, depth, depth, events);
         for (idx = 0; idx < depth; ++idx) {
             libvhost_submit(ctrl, 0, (round * depth + idx) << 10, &r_iov[idx].iov, 1, false, NULL);
         }
-        libvhost_getevents(ctrl, 0, depth, events);
+        libvhost_getevents(ctrl, 0, depth, depth, events);
         for (idx = 0; idx < depth; ++idx) {
             if (0 != my_memcmp(w_iov[idx].buf, r_iov[idx].buf, buf_size)) {
                 printf("req %d miscompare failed\n", idx);

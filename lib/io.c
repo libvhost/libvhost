@@ -7,10 +7,11 @@
  * This work is licensed under the terms of the GNU GPL, version 2 or later.
  * See the COPYING file in the top-level directory.
  */
+#include <linux/virtio_blk.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <linux/virtio_blk.h>
+#include <unistd.h>  // usleep
 
 #include "libvhost.h"
 #include "libvhost_internal.h"
@@ -62,8 +63,6 @@ static char* get_virtio_scsi_task_resp(struct virtio_scsi_cmd_resp* resp) {
 static int task_done(void* opaque) {
     struct libvhost_io_task* task = opaque;
 
-    task->finished = true;
-
     if (task->vq->ctrl->type == DEVICE_TYPE_BLK) {
         struct libvhost_virtio_blk_req* req = task->priv;
         DEBUG("[TASK DONE] offset: 0x%" PRIx64
@@ -83,14 +82,24 @@ static int task_done(void* opaque) {
     return 0;
 }
 
-static int task_getevents(struct libvhost_virt_queue* vq, struct libvhost_io_task** out_task) {
-    return virtqueue_get(vq, out_task);
+static int task_getevents(struct libvhost_virt_queue* vq, int min, int nr, VhostEvent* events) {
+    int cnt = 0;
+    while (cnt < nr) {
+        if (virtqueue_get(vq, &events[cnt]) != 0) {
+            if (cnt >= min) {
+                return cnt;
+            }
+            continue;
+        }
+        cnt++;
+    }
+    return cnt;
 }
 
 static int libvhost_readwritev(struct libvhost_ctrl* ctrl, int q_idx, uint64_t offset, struct iovec* iov, int iovcnt,
                                enum libvhost_io_type type, bool async, void* opaque) {
     struct libvhost_io_task* task;
-    struct libvhost_io_task* out_task;
+    VhostEvent event;
     struct libvhost_virt_queue* vq;
 
     if (ctrl->type == DEVICE_TYPE_SCSI) {
@@ -105,7 +114,6 @@ static int libvhost_readwritev(struct libvhost_ctrl* ctrl, int q_idx, uint64_t o
         exit(EXIT_FAILURE);
         return -1;
     }
-    CHECK(task->finished == false);
     task->cb = task_done;
     task->opaque = opaque;
     // TODO: check the offset, len that should be aligned to 512/4k block size.
@@ -128,25 +136,18 @@ static int libvhost_readwritev(struct libvhost_ctrl* ctrl, int q_idx, uint64_t o
         return 0;
     }
 
-    while (!task->finished) {
-        if (task_getevents(vq, &out_task) == 0) {
-            continue;
-        }
-        if (task != out_task) {
-            virtqueue_free_task(out_task);
-            printf("[WARN] io is out-of-order, task: %p, out_task: %p\n", task, out_task);
-        }
+    while (task_getevents(vq, 0, 1, &event) == 0) {
+        usleep(100);
+        continue;
     }
-    virtqueue_free_task(task);
     return 0;
 }
-
 
 static int libvhost_discard_write_zeroes(struct libvhost_ctrl* ctrl, int q_idx,
                                          uint64_t offset, struct iovec* iov, int iovcnt,
                                          enum libvhost_io_type type, void* opaque) {
     struct libvhost_io_task* task;
-    struct libvhost_io_task* out_task;
+    VhostEvent event;
     struct libvhost_virt_queue* vq = &ctrl->vqs[q_idx];
     task = virtqueue_get_task(vq);
     if (!task) {
@@ -155,7 +156,6 @@ static int libvhost_discard_write_zeroes(struct libvhost_ctrl* ctrl, int q_idx,
         return -1;
     }
     CHECK(type <= 4);
-    CHECK(task->finished == false);
     task->cb = task_done;
     task->opaque = opaque;
     // TODO: check the offset, len that should be aligned to 512/4k block size.
@@ -167,16 +167,10 @@ static int libvhost_discard_write_zeroes(struct libvhost_ctrl* ctrl, int q_idx,
 
     blk_task_submit(vq, task);
 
-    while (!task->finished) {
-        if (task_getevents(vq, &out_task) == 0) {
-            continue;
-        }
-        if (task != out_task) {
-            virtqueue_free_task(out_task);
-            printf("[WARN] io is out-of-order, task: %p, out_task: %p\n", task, out_task);
-        }
+    while (task_getevents(vq, 0, 1, &event) == 0) {
+        usleep(100);
+        continue;
     }
-    virtqueue_free_task(task);
     return 0;
 }
 
@@ -227,30 +221,14 @@ int libvhost_submit(struct libvhost_ctrl* ctrl, int q_idx, uint64_t offset, stru
     return libvhost_readwritev(ctrl, q_idx, offset, iov, iovcnt, write ? VHOST_IO_WRITE : VHOST_IO_READ, true, opaque);
 }
 
-int libvhost_getevents(struct libvhost_ctrl* ctrl, int q_idx, int nr, VhostEvent* events) {
+int libvhost_getevents(struct libvhost_ctrl* ctrl, int q_idx, int min, int nr, VhostEvent* events) {
     int done = 0;
     int ret = 0;
     int i;
-    struct libvhost_io_task* done_tasks[VIRTIO_MAX_IODEPTH];
 
     q_idx = ctrl->type == DEVICE_TYPE_BLK ? q_idx : q_idx + 2;
 
-    while (done < nr) {
-        ret = task_getevents(&ctrl->vqs[q_idx], &done_tasks[done]);
-        if (ret == 0) {
-            continue;
-        }
-        done += ret;
-        CHECK(done_tasks[done - 1]->finished == true);
-    }
-    for (i = 0; i < done; i++) {
-        events[i].data = done_tasks[i]->opaque;
-        events[i].res = (ctrl->type == DEVICE_TYPE_BLK ?
-                         ((struct libvhost_virtio_blk_req*)done_tasks[i]->priv)->status :
-                         ((struct libvhost_virtio_scsi_req*)done_tasks[i]->priv)->resp.status);
-        virtqueue_free_task(done_tasks[i]);
-    }
-    return done;
+    return task_getevents(&ctrl->vqs[q_idx], min, nr, events);
 }
 
 void libvhost_scsi_read_capacity(struct libvhost_ctrl* ctrl) {

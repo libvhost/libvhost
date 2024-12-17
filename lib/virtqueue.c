@@ -173,13 +173,24 @@ static void reset_desc(struct libvhost_virt_queue* vq, uint16_t head) {
     vq->num_free++;
 }
 
-int virtqueue_get(struct libvhost_virt_queue* vq, struct libvhost_io_task** out_task) {
+static int virtqueue_get_io_status(struct libvhost_io_task* task) {
+    if (task->vq->ctrl->type == DEVICE_TYPE_BLK) {
+        return ((struct libvhost_virtio_blk_req*)task->priv)->status;
+    } else if (task->vq->ctrl->type == DEVICE_TYPE_SCSI) {
+        return ((struct libvhost_virtio_scsi_req*)task->priv)->resp.status;
+    } else {
+        ERROR("UNKNOWN DEVICE TYPE\n");
+        return -1;
+    }
+}
+
+int virtqueue_get(struct libvhost_virt_queue* vq, VhostEvent* event) {
     uint16_t id;
     uint16_t last_used;
     uint32_t len;
     struct libvhost_io_task* task;
     if (!more_used(vq)) {
-        return 0;
+        return -1;
     }
     DEBUG("last_used_idx: %d, used->idx: %d\n", vq->last_used_idx, vq->vring.used->idx);
     rmb();
@@ -202,8 +213,10 @@ int virtqueue_get(struct libvhost_virt_queue* vq, struct libvhost_io_task** out_
     reset_desc(vq, id);
 
     vq->last_used_idx++;
-    *out_task = task;
-    return 1;
+    event->data = task->opaque;
+    event->res = virtqueue_get_io_status(task);
+    virtqueue_free_task(task);
+    return 0;
 }
 
 struct libvhost_io_task* virtqueue_get_task(struct libvhost_virt_queue* vq) {
