@@ -99,6 +99,7 @@ struct libvhost_virt_queue {
     int size;
     /* Must be [0, 2^16 - 1] */
     uint16_t last_used_idx;
+    bool indirect;
     int kickfd;
     int callfd;
 

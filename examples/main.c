@@ -152,7 +152,7 @@ int test_async_io(struct libvhost_ctrl* ctrl) {
     int idx;
     int ret = 0;
     int buf_size = 1024;
-    const int depth = 128;
+    const int depth = 1024;
     const int max_round = 100;
     struct test_iov r_iov[depth];
     struct test_iov w_iov[depth];
@@ -206,6 +206,12 @@ static int test_blk(struct libvhost_ctrl* ctrl) {
         return ret;
     }
 
+    ret = test_async_io(ctrl);
+    if (ret != 0) {
+        printf("vhost-blk async io failed\n");
+        return ret;
+    }
+
     ret = test_discard(ctrl);
     if (ret != 0) {
         printf("test_discard failed: %d\n", ret);
@@ -240,7 +246,11 @@ static int test_scsi(struct libvhost_ctrl* ctrl) {
     }
     printf("vhost-scsi sync read write ok\n");
 
-    test_async_io(ctrl);
+    ret = test_async_io(ctrl);
+    if (ret != 0) {
+        printf("vhost-scsi async io failed\n");
+        goto fail;
+    }
     printf("vhost-scsi async io ok\n");
 
 fail:

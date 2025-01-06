@@ -39,6 +39,7 @@ void vhost_vq_init(struct libvhost_virt_queue* vq, struct libvhost_ctrl* ctrl) {
     vq->callfd = eventfd(0, EFD_CLOEXEC | EFD_NONBLOCK);
 
     vq->desc_state = calloc(sizeof(void*), vq->size);
+    vq->indirect = (ctrl->features & (1ULL << VIRTIO_RING_F_INDIRECT_DESC));
 
     size_aligned = vring_size(vq->size, VIRTIO_PCI_VRING_ALIGN);
     q_mem = libvhost_malloc(ctrl, size_aligned);
@@ -101,23 +102,57 @@ static void virtio_get_flags_name(uint16_t flags, char name[16]) {
     name[j] = '\0';
 }
 
+static struct vring_desc *alloc_indirect_split(struct libvhost_virt_queue* vq, unsigned int size) {
+    struct vring_desc *desc;
+    unsigned int i;
+
+    desc = libvhost_malloc(vq->ctrl, size * sizeof(struct vring_desc));
+    if (!desc)
+        return NULL;
+
+    for (i = 0; i < size; i++)
+        desc[i].next = (__virtio16)(i + 1);
+    return desc;
+}
+
 void virtring_add(struct libvhost_virt_queue* vq, struct iovec* iovec, int num_out, int num_in, void* data) {
-    struct vring_desc* desc = vq->vring.desc;
-    int i;
+    struct vring_desc* desc;
+    int i, j;
     int n;
     int last_n;
     uint16_t avail;
     uint16_t head = vq->free_head;
     char flags_name[16] = {0};
+    bool indirect;
+    uint16_t descs_used;
+
+    /* Use the indirect vring only if the number of iov greater than 1 */
+    if (vq->indirect && num_in + num_out > 1) {
+        desc = alloc_indirect_split(vq, num_in + num_out);
+    } else {
+        desc = NULL;
+    }
+    if (desc) {
+        /* Use a single buffer which doesn't continue */
+        indirect = true;
+        /* Set up rest to use this indirect table */
+        i = 0;
+        descs_used = 1;
+    } else {
+        indirect = false;
+        desc = vq->vring.desc;
+        i = head;
+        descs_used = num_in + num_out;
+    }
 
     DEBUG("[VIRTIO] avail add idx: %d num_free: %d\n", head, vq->num_free);
-    if (vq->num_free < num_out + num_in) {
-        ERROR("[VIRTIO] avail add failed: %d\n", vq->num_free);
+    if (vq->num_free < descs_used) {
+        ERROR("[VIRTIO] avail add failed: %d %d\n", vq->num_free, descs_used);
         exit(EXIT_FAILURE);
         return;
     }
 
-    n = head;
+    n = i;
     for (i = 0; i < num_out; ++i) {
         desc[n].flags = VRING_DESC_F_NEXT;
         desc[n].addr = (uint64_t)iovec[i].iov_base;
@@ -140,7 +175,20 @@ void virtring_add(struct libvhost_virt_queue* vq, struct iovec* iovec, int num_o
         n = desc[n].next;
     }
     desc[last_n].flags &= ~VRING_DESC_F_NEXT;
-    vq->num_free -= (num_out + num_in);
+    if (indirect) {
+    	/* Now that the indirect table is filled in, map it. */
+        vq->vring.desc[head].flags = VRING_DESC_F_INDIRECT;
+        vq->vring.desc[head].addr = (uint64_t)desc;
+        vq->vring.desc[head].len = (num_in + num_out) * sizeof(struct vring_desc);
+        virtio_get_flags_name(desc[n].flags, flags_name);
+        DEBUG("    item %2d addr %p len 0x%-10" PRIx64 " flags %s\n", head, desc,
+              (num_in + num_out) * sizeof(struct vring_desc),
+              flags_name);
+        n = vq->vring.desc[head].next;
+    }
+    /* We're using some buffers from the free list. */
+    vq->num_free -= descs_used;
+    /* Update free pointer */
     vq->free_head = n;
 
     vq->desc_state[head] = data;
@@ -166,6 +214,13 @@ static void reset_desc(struct libvhost_virt_queue* vq, uint16_t head) {
         id = vq->vring.desc[id].next;
         vq->num_free++;
     }
+
+    // free the indirect vring memory
+    if (vq->vring.desc[id].flags & VRING_DESC_F_INDIRECT) {
+        struct vring_desc* desc = (struct vring_desc*)vq->vring.desc[id].addr;
+        libvhost_free(vq->ctrl, desc);
+    }
+
     vq->vring.desc[id].next = vq->free_head;
     vq->free_head = head;
 
