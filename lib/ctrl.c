@@ -70,7 +70,7 @@ ring upon receiving VHOST_USER_GET_VRING_BASE.
 
 */
 #define DEFAULT_VHOST_FEATURES                                                                       \
-    ((1ULL << VHOST_F_LOG_ALL) | (1ULL << VIRTIO_F_VERSION_1) | (1ULL << VIRTIO_F_NOTIFY_ON_EMPTY) | \
+    ((1ULL << VIRTIO_F_VERSION_1) | (1ULL << VIRTIO_F_NOTIFY_ON_EMPTY) | \
      (1ULL << VIRTIO_RING_F_EVENT_IDX) | (1ULL << VIRTIO_RING_F_INDIRECT_DESC)) |                    \
         (1ULL << VHOST_USER_F_PROTOCOL_FEATURES)
 //  (1ULL << VIRTIO_F_RING_PACKED)
