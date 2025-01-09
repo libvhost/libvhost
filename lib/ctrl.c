@@ -635,16 +635,19 @@ static int vhost_enable_vq(struct libvhost_ctrl* ctrl, struct libvhost_virt_queu
     addr.desc_user_addr = (uint64_t)vq->vring.desc;
     addr.avail_user_addr = (uint64_t)vq->vring.avail;
     addr.used_user_addr = (uint64_t)vq->vring.used;
+    // log_guest_addr records the used ring physical address, here gpa == hva.
+    addr.log_guest_addr = (uint64_t)vq->vring.used;
 
-    addr.flags = 0;
+    addr.flags = (1 << VHOST_VRING_F_LOG);
     if (vhost_ioctl(ctrl, VHOST_USER_SET_VRING_ADDR, &addr) != 0) {
         ERROR("Unable to set vring addr\n");
         return -1;
     }
     INFO(
         "  VHOST_USER_SET_VRING_ADDR idx: %d desc_user_addr: %lx "
-        "used_user_addr: %lx avail_user_addr: %lx\n",
-        addr.index, addr.desc_user_addr, addr.used_user_addr, addr.avail_user_addr);
+        "used_user_addr: %lx avail_user_addr: %lx log_guest_addr: %lx\n",
+        addr.index, addr.desc_user_addr, addr.used_user_addr, addr.avail_user_addr,
+        addr.log_guest_addr);
 
     VhostVringFile file;
     file.index = vq->idx;

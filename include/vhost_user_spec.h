@@ -86,6 +86,8 @@ typedef struct VhostVringFile {
 typedef struct VhostVringAddr {
     unsigned int index;
     unsigned int flags;
+    /* Whether log address is valid. If set enables logging. */
+    #define VHOST_VRING_F_LOG 0
     uint64_t desc_user_addr;
     uint64_t used_user_addr;
     uint64_t avail_user_addr;
