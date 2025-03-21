@@ -78,11 +78,13 @@ typedef int (*VhostIOCB)(void* task);
 struct libvhost_io_task {
     struct libvhost_virt_queue* vq;
     uint64_t offset;  // align to sector size.
-    enum libvhost_io_type type;
     struct iovec iovs[128];
+    enum libvhost_io_type type;
     int iovcnt;
+    int num_add;
     int q_idx;
     VhostIOCB cb;
+    struct vring_packed_desc* indir_desc;
 
     // struct libvhost_virtio_blk_req or SCSIReq;
     void* priv;
@@ -93,17 +95,47 @@ struct libvhost_io_task {
     struct libvhost_io_task* next;
 };
 
+struct vring_virtqueue_packed {
+    struct {
+        struct vring_packed_desc* desc;
+        struct vring_packed_desc_event* driver;
+        struct vring_packed_desc_event* device;
+    } vring;
+
+    /* Avail used flags. */
+    uint16_t avail_used_flags;
+
+    /* Index of the next avail descriptor. */
+    uint16_t next_avail_idx;
+};
+
 struct libvhost_virt_queue {
     struct libvhost_ctrl* ctrl;
     int idx;
     int size;
-    /* Must be [0, 2^16 - 1] */
+
+    /* Last used index  we've seen.
+     * for split ring, it just contains last used index
+     * for packed ring:
+     * bits up to VRING_PACKED_EVENT_F_WRAP_CTR include the last used index.
+     * bits from VRING_PACKED_EVENT_F_WRAP_CTR include the used wrap counter.
+     */
     uint16_t last_used_idx;
+
+    /* Host supports indirect buffers */
     bool indirect;
+
+    /* Is this a packed ring? */
+    bool packed_ring;
+
     int kickfd;
     int callfd;
 
-    struct vring vring;
+    union {
+        struct vring vring;
+        struct vring_virtqueue_packed packed;
+    };
+
     /* next free head in desc table */
     uint16_t free_head;
     uint16_t num_free;
@@ -112,14 +144,20 @@ struct libvhost_virt_queue {
     void** desc_state;
 };
 
-void vhost_vq_init(struct libvhost_virt_queue* vq, struct libvhost_ctrl* ctrl);
-void vhost_vq_free(struct libvhost_virt_queue* vq);
-void virtring_add(struct libvhost_virt_queue* vq, struct iovec* iovec, int num_out, int num_in, void* data);
+void vhost_create_virtqueue(struct libvhost_virt_queue* vq, struct libvhost_ctrl* ctrl);
+void vhost_free_vq(struct libvhost_virt_queue* vq);
 struct libvhost_io_task* virtqueue_get_task(struct libvhost_virt_queue* vq);
 void virtqueue_free_task(struct libvhost_io_task* task);
 
+void virtring_add(struct libvhost_virt_queue* vq, struct iovec* iovec, int num_out, int num_in, void* data);
+void virtring_add_packed(struct libvhost_virt_queue* vq, struct iovec* iovec, int num_out, int num_in, void* data);
+void virtqueue_add(struct libvhost_virt_queue* vq, struct iovec* iovec, int num_out, int num_in, void* data);
+
 void virtqueue_kick(struct libvhost_virt_queue* vq);
+
 int virtqueue_get(struct libvhost_virt_queue* vq, VhostEvent* event);
+int virtring_get_packed(struct libvhost_virt_queue* vq, VhostEvent* event);
+int virtring_get_split(struct libvhost_virt_queue* vq, VhostEvent* event);
 
 int libvhost_mem_get_memory_fds(struct libvhost_ctrl* ctrl, int* fds, int* size);
 

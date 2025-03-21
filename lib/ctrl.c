@@ -69,11 +69,9 @@ or receiving the in-band message VHOST_USER_VRING_KICK if negotiated, and stop
 ring upon receiving VHOST_USER_GET_VRING_BASE.
 
 */
-#define DEFAULT_VHOST_FEATURES                                                                       \
-    ((1ULL << VIRTIO_F_VERSION_1) | (1ULL << VIRTIO_F_NOTIFY_ON_EMPTY) | \
-     (1ULL << VIRTIO_RING_F_EVENT_IDX) | (1ULL << VIRTIO_RING_F_INDIRECT_DESC)) |                    \
-        (1ULL << VHOST_USER_F_PROTOCOL_FEATURES)
-//  (1ULL << VIRTIO_F_RING_PACKED)
+#define DEFAULT_VHOST_FEATURES                                                                                      \
+    ((1ULL << VIRTIO_F_VERSION_1) | (1ULL << VIRTIO_F_NOTIFY_ON_EMPTY) | (1ULL << VHOST_USER_F_PROTOCOL_FEATURES) | \
+     (1ULL << VIRTIO_RING_F_EVENT_IDX) | (1ULL << VIRTIO_RING_F_INDIRECT_DESC))
 
 #define DEFAULT_VHOST_PROTOCOL_FEATURES                                                               \
     ((1ULL << VHOST_USER_PROTOCOL_F_MQ) | (1ULL << VHOST_USER_PROTOCOL_F_LOG_SHMFD) |                 \
@@ -220,6 +218,13 @@ struct libvhost_ctrl* libvhost_ctrl_create(const char* path) {
     return ctrl;
 }
 
+struct libvhost_ctrl* libvhost_ctrl_create_packed(const char* path) {
+    /* Only blk support packed ring */
+    struct libvhost_ctrl* ctrl = libvhost_ctrl_create(path);
+    ctrl->features |= (1ULL << VIRTIO_F_RING_PACKED);
+    return ctrl;
+}
+
 struct libvhost_ctrl* libvhost_scsi_ctrl_create(const char* path, uint16_t target) {
     struct libvhost_ctrl* ctrl = libvhost_ctrl_create_common(path);
     if (!ctrl) {
@@ -260,7 +265,7 @@ void libvhost_ctrl_destroy(struct libvhost_ctrl* ctrl) {
     __ctrl_free_memory(ctrl);
     free(ctrl->sock_path);
     for (i = 0; i < ctrl->nr_vqs; ++i){
-        vhost_vq_free(&ctrl->vqs[i]);
+        vhost_free_vq(&ctrl->vqs[i]);
     }
     free(ctrl->vqs);
     if (ctrl->type == DEVICE_TYPE_BLK) {
@@ -488,6 +493,7 @@ static int libvhost_reconnect(struct libvhost_ctrl* ctrl) {
             ERROR("Failed to enable vq: %d", i);
         }
     }
+    return 0;
 }
 
 static void* reconnect_thread_worker(void* arg) {
@@ -602,6 +608,22 @@ static int setup_inflight(struct libvhost_virt_queue* vq) {
     return 0;
 }
 
+static void set_vhost_vring_addr(struct libvhost_virt_queue* vq, struct VhostVringAddr* addr) {
+    addr->index = vq->idx;
+    if (vq->packed_ring) {
+        addr->desc_user_addr = (uint64_t)vq->packed.vring.desc;
+        addr->avail_user_addr = (uint64_t)vq->packed.vring.driver;
+        addr->used_user_addr = (uint64_t)vq->packed.vring.device;
+    } else {
+        addr->desc_user_addr = (uint64_t)vq->vring.desc;
+        addr->avail_user_addr = (uint64_t)vq->vring.avail;
+        addr->used_user_addr = (uint64_t)vq->vring.used;
+        // log_guest_addr records the used ring physical address, here gpa == hva.
+        addr->log_guest_addr = (uint64_t)vq->vring.used;
+        addr->flags = (1 << VHOST_VRING_F_LOG);
+    }
+}
+
 static int vhost_enable_vq(struct libvhost_ctrl* ctrl, struct libvhost_virt_queue* vq) {
     VhostVringState state;
 
@@ -631,14 +653,7 @@ static int vhost_enable_vq(struct libvhost_ctrl* ctrl, struct libvhost_virt_queu
     INFO("  VHOST_USER_SET_VRING_BASE idx: %d num: %d\n", state.index, state.num);
 
     VhostVringAddr addr;
-    addr.index = vq->idx;
-    addr.desc_user_addr = (uint64_t)vq->vring.desc;
-    addr.avail_user_addr = (uint64_t)vq->vring.avail;
-    addr.used_user_addr = (uint64_t)vq->vring.used;
-    // log_guest_addr records the used ring physical address, here gpa == hva.
-    addr.log_guest_addr = (uint64_t)vq->vring.used;
-
-    addr.flags = (1 << VHOST_VRING_F_LOG);
+    set_vhost_vring_addr(vq, &addr);
     if (vhost_ioctl(ctrl, VHOST_USER_SET_VRING_ADDR, &addr) != 0) {
         ERROR("Unable to set vring addr\n");
         return -1;
@@ -684,7 +699,7 @@ int libvhost_ctrl_add_virtqueue(struct libvhost_ctrl* ctrl, int num_io_queues, i
         struct libvhost_virt_queue* vq = &ctrl->vqs[i];
         vq->idx = i;
         vq->size = size;
-        vhost_vq_init(vq, ctrl);
+        vhost_create_virtqueue(vq, ctrl);
         if ((ret = vhost_enable_vq(ctrl, vq)) != 0) {
             return ret;
         }
