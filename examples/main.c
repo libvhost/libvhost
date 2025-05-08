@@ -334,6 +334,7 @@ int main(int argc, char** argv) {
     ret = scsi ? test_scsi(ctrl) : test_blk(ctrl);
 
 fail_ctrl:
+    libvhost_ctrl_stop(ctrl);
     libvhost_ctrl_destroy(ctrl);
     return ret;
 }

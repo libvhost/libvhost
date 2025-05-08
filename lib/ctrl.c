@@ -614,7 +614,7 @@ static int vhost_enable_vq(struct libvhost_ctrl* ctrl, struct libvhost_virt_queu
 
     state.index = vq->idx;
     state.num = vq->size;
-    INFO("Setup virtqueue \n");
+    INFO("Setup virtqueue %d\n", vq->idx);
     // Tell the backend that the virtqueue size.
     if (vhost_ioctl(ctrl, VHOST_USER_SET_VRING_NUM, &state) != 0) {
         ERROR("Unable to set vring num\n");
@@ -695,4 +695,28 @@ int libvhost_ctrl_add_virtqueue(struct libvhost_ctrl* ctrl, int num_io_queues, i
         libvhost_scsi_read_capacity(ctrl);
     }
     return 0;
+}
+
+static int vhost_stop_vq(struct libvhost_ctrl* ctrl, struct libvhost_virt_queue* vq) {
+    INFO("Stop virtqueue %d\n", vq->idx);
+    VhostVringState state;
+    state.index = vq->idx;
+    state.num = 0;
+    INFO("  VHOST_USER_GET_VRING_base idx: %d\n", state.index);
+    if (vhost_ioctl(ctrl, VHOST_USER_GET_VRING_BASE, &state) != 0) {
+        ERROR("Unable to get vring base, vq: %d\n", vq->idx);
+        return -1;
+    }
+    vq->last_used_idx = state.num;
+    return 0;
+}
+
+int libvhost_ctrl_stop(struct libvhost_ctrl* ctrl) {
+    int rc = 0;
+    int i;
+
+    for (i = 0; i < ctrl->nr_vqs; i++) {
+        rc |= vhost_stop_vq(ctrl, &ctrl->vqs[i]);
+    }
+    return rc;
 }

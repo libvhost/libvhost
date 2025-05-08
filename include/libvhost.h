@@ -34,6 +34,7 @@ struct libvhost_ctrl* libvhost_scsi_ctrl_create(const char* path, uint16_t targe
 void libvhost_ctrl_destroy(struct libvhost_ctrl* ctrl);
 int libvhost_ctrl_connect(struct libvhost_ctrl* ctrl);
 int libvhost_ctrl_setup(struct libvhost_ctrl* ctrl);
+int libvhost_ctrl_stop(struct libvhost_ctrl* ctrl);
 bool libvhost_ctrl_init_memory(struct libvhost_ctrl* ctrl, uint64_t mem_size);
 int libvhost_ctrl_add_virtqueue(struct libvhost_ctrl* ctrl, int num_io_queues, int size);
 // int vhost_ctrl_del_vq(struct libvhost_ctrl* ctrl);
