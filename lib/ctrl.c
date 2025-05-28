@@ -707,7 +707,6 @@ static int vhost_stop_vq(struct libvhost_ctrl* ctrl, struct libvhost_virt_queue*
         ERROR("Unable to get vring base, vq: %d\n", vq->idx);
         return -1;
     }
-    vq->last_used_idx = state.num;
     return 0;
 }
 
