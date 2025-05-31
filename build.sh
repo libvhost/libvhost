@@ -6,10 +6,10 @@ type=${TYPE:-asan}
 [ $type = "debug" ] && type=Debug
 cmake -B build -GNinja -DCMAKE_BUILD_TYPE=$type -DCMAKE_INSTALL_PREFIX=build
 
-# Usage: main -p <socket_path> [-s] [-t <target>] [-h]
-ninja -C build -v && build/examples/vhost_test -p /var/lib/zbs/aurorad/vhost-blk.0
+# Usage: main -u <socket_path> [-p] [-s] [-t <target>] [-h]
+ninja -C build -v && build/examples/vhost_test -u /var/lib/zbs/aurorad/vhost-blk.0
 # for vhost-scsi
-# ninja -C build -v && build/examples/vhost_test -p /var/lib/zbs/aurorad/vhost-blk.0 -s -t 0
+# ninja -C build -v && build/examples/vhost_test -u /var/lib/zbs/aurorad/vhost-blk.0 -s -t 0
 
 # ninja -C build install -v
 #cd build; cpack3

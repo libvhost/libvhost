@@ -260,9 +260,10 @@ fail:
 }
 
 static void print_usage() {
-    printf("Usage: main -p <socket_path> [-s] [-t <target>] [-h]\n");
+    printf("Usage: main -u <socket_path> [-p] [-s] [-t <target>] [-h]\n");
     printf("Options:\n");
-    printf("  -p, Vhost controller socket path, required\n");
+    printf("  -u, Vhost controller socket path, required\n");
+    printf("  -p, Enable packed ring\n");
     printf("  -s, Create vhost scsi libvhost controller\n");
     printf("  -t, Specify the vhost scsi target number\n");
     printf("  -h, Display this help message\n");
@@ -277,12 +278,16 @@ int main(int argc, char** argv) {
     char *socket_path = NULL;
     int scsi = 0, target;
     int ret = 0;
+    bool packed = false;
     int opt;
 
-    while ((opt = getopt(argc, argv, "p:st:h")) != -1) {
+    while ((opt = getopt(argc, argv, "u:st:h:p")) != -1) {
         switch (opt) {
-            case 'p':
+            case 'u':
                 socket_path = optarg;
+                break;
+            case 'p':
+                packed = true;
                 break;
             case 's':
                 scsi = 1;
@@ -304,8 +309,13 @@ int main(int argc, char** argv) {
         PARSE_ARGS_EXIT(EXIT_FAILURE);
     }
 
-    ctrl = scsi ? libvhost_scsi_ctrl_create(socket_path, target) :
-                  libvhost_ctrl_create(socket_path);
+    if (packed && scsi) {
+        fprintf(stderr, "Error: vhost-scsi doesn't support packed ring.\n");
+    }
+
+    ctrl = scsi     ? libvhost_scsi_ctrl_create(socket_path, target)
+           : packed ? libvhost_ctrl_create_packed(socket_path)
+                    : libvhost_ctrl_create(socket_path);
     if (!ctrl) {
         return 1;
     }

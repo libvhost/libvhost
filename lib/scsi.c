@@ -48,7 +48,7 @@ static int scsi_add_req(struct libvhost_virt_queue* vq, struct libvhost_virtio_s
         }
     }
 
-    virtring_add(vq, iovs, num_out, num_in, data);
+    virtqueue_add(vq, iovs, num_out, num_in, data);
     return 0;
 }
 

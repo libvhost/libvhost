@@ -3,7 +3,8 @@
 - [x] 大页内存退出时不释放
 - [ ] virtio
     - [x] indirect desc support
-    - [ ] packed ring support
+    - [x] packed ring support
+    - [ ] packed ring live recovery support
     - [ ] interrupt io(eventfd) support
 - [ ] kernel vhost-scsi support
 - [ ] 超过文件范围的 IO 确认失败

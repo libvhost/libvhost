@@ -31,6 +31,7 @@ struct libvhost_ctrl;
 /* vhost controller */
 struct libvhost_ctrl* libvhost_ctrl_create(const char* path);
 struct libvhost_ctrl* libvhost_scsi_ctrl_create(const char* path, uint16_t target);
+struct libvhost_ctrl* libvhost_ctrl_create_packed(const char* path);
 void libvhost_ctrl_destroy(struct libvhost_ctrl* ctrl);
 int libvhost_ctrl_connect(struct libvhost_ctrl* ctrl);
 int libvhost_ctrl_setup(struct libvhost_ctrl* ctrl);
