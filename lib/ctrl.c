@@ -96,7 +96,7 @@ struct hugepage_info {
 struct libvhost_mem {
     int nregions;
     struct hugepage_info hugepages[VHOST_MEMORY_MAX_NREGIONS];
-    buddy_t* buddy;
+    vhost_buddy_t buddy;
 };
 
 static int __hugepage_info_alloc(struct hugepage_info* info) {
@@ -134,7 +134,7 @@ static bool libvhost_mem_init(struct libvhost_mem* mem, uint64_t mem_size) {
     if (libvhost_mem_add_region(mem, mem_size) != 0)  {
         return false;
     }
-    mem->buddy = buddy_create_with_mem(4096, (void*)(mem->hugepages[0].addr), mem_size);
+    mem->buddy = vhost_buddy_create_noalloc("vhost-mem", (void*)mem->hugepages[0].addr, mem_size);
     if (!mem->buddy) {
         return false;
     }
@@ -150,7 +150,7 @@ static void libvhost_mem_free(struct libvhost_mem* mem) {
             close(mem->hugepages[i].fd);
         }
     }
-    buddy_destroy_with_mem(mem->buddy);
+    vhost_buddy_destroy(mem->buddy);
 }
 
 static void libvhost_mem_get_memory_info(struct libvhost_mem* mem, struct libvhost_user_memory* memory) {
@@ -187,9 +187,9 @@ int libvhost_mem_get_memory_fds(struct libvhost_ctrl* ctrl, int* fds, int* size)
     return 0;
 }
 
-void* libvhost_malloc(struct libvhost_ctrl* ctrl, uint64_t size) { return buddy_alloc(ctrl->mem->buddy, size); }
+void* libvhost_malloc(struct libvhost_ctrl* ctrl, uint64_t size) { return vhost_buddy_alloc(ctrl->mem->buddy, size); }
 
-void libvhost_free(struct libvhost_ctrl* ctrl, void* ptr) { buddy_free(ctrl->mem->buddy, ptr); }
+void libvhost_free(struct libvhost_ctrl* ctrl, void* ptr) { vhost_buddy_free(ctrl->mem->buddy, ptr); }
 
 /* Controller Management */
 static struct libvhost_ctrl* libvhost_ctrl_create_common(const char* path) {

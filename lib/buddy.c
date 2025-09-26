@@ -9,208 +9,281 @@
  */
 
 #include "buddy.h"
-#include "utils.h"
-#include <assert.h>
+
+#include <errno.h>
+#include <math.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/mman.h>
+#include <sys/queue.h>
 
-struct buddy {
-    unsigned int nmemb;
-    unsigned int size;
-    char* base;
-    unsigned int meta[0];
+#include "utils.h"
+
+// --- Constants ---
+#define MIN_ALLOC_SHIFT 12 // 2^12 = 4KB
+
+// A node in our free lists
+struct block_node {
+    LIST_ENTRY(block_node) link;
 };
 
-#define L_LEAF(index) ((index)*2 + 1)
-#define R_LEAF(index) ((index)*2 + 2)
-#define PARENT(index) (((index) + 1) / 2 - 1)
+// The main buddy allocator structure
+struct vhost_buddy {
+    char name[32];
+    void *base_addr;
+    unsigned int total_size;
+    bool is_hugepage;
+    bool no_alloc;
 
-#define IS_POWER_OF_2(x) (!((x) & ((x)-1)))
-#define MAX(a, b) ((a) > (b) ? (a) : (b))
+    unsigned int min_alloc_shift;
+    unsigned int max_alloc_shift;
+    unsigned int num_levels;
 
-static inline unsigned int roundup_power_of_2(unsigned int val) {
-    return sizeof(unsigned int) * 8 - __builtin_clz(val);
+    // Metadata: positive value is the level of a free block,
+    // negative is -(level + 1) for an allocated block.
+    int8_t *level_map;
+    unsigned int map_entries;
+
+    // One free list per level
+    LIST_HEAD(free_list_head, block_node) *free_lists;
+};
+
+// --- Helper Functions ---
+
+static inline unsigned int level_to_size(vhost_buddy_t buddy, unsigned int level) {
+    return 1U << (level + buddy->min_alloc_shift);
 }
 
-buddy_t buddy_create_with_mem(unsigned int size, void* addr, uint64_t mem_len) {
-    struct buddy* buddy;
-    unsigned int nodes, i;
-    uint64_t offset = 0;
-    uint64_t nmemb = (mem_len - sizeof(struct buddy))/ (size + sizeof(unsigned int) * 2);
-    CHECK(addr);
-    INFO("nmemb: %lu\n", nmemb);
-    for (i = 0; i < 64; ++i) {
-        if (nmemb < (1 << i)) {
+static inline unsigned int round_up_pow2(unsigned int v) {
+    v--;
+    v |= v >> 1;
+    v |= v >> 2;
+    v |= v >> 4;
+    v |= v >> 8;
+    v |= v >> 16;
+    v++;
+    return v;
+}
+
+static inline unsigned int size_to_level(vhost_buddy_t buddy, unsigned int size) {
+    if (size == 0) return 0;
+
+    unsigned int block_size = round_up_pow2(size);
+
+    unsigned int shift = __builtin_ctz(block_size);
+
+    if (shift < buddy->min_alloc_shift) shift = buddy->min_alloc_shift;
+    if (shift > buddy->max_alloc_shift) return (unsigned int)-1;
+    return shift - buddy->min_alloc_shift;
+}
+
+// --- API Implementation ---
+
+vhost_buddy_t vhost_buddy_create(const char *name, unsigned int size, bool hugepage) {
+    vhost_buddy_t buddy = calloc(1, sizeof(struct vhost_buddy));
+    if (!buddy) {
+        perror("Failed to allocate buddy handle");
+        return NULL;
+    }
+    strncpy(buddy->name, name, sizeof(buddy->name) - 1);
+    buddy->min_alloc_shift = MIN_ALLOC_SHIFT;
+
+    buddy->total_size = round_up_pow2(size);
+    if (buddy->total_size < (1U << MIN_ALLOC_SHIFT)) {
+        buddy->total_size = (1U << MIN_ALLOC_SHIFT);
+    }
+
+    buddy->max_alloc_shift = __builtin_ctz(buddy->total_size);
+    buddy->num_levels = buddy->max_alloc_shift - buddy->min_alloc_shift + 1;
+
+    buddy->free_lists = calloc(buddy->num_levels, sizeof(*buddy->free_lists));
+    if (!buddy->free_lists) {
+        perror("Failed to allocate free lists");
+        free(buddy);
+        return NULL;
+    }
+
+    if (hugepage) {
+        buddy->base_addr =
+            mmap(NULL, buddy->total_size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_HUGETLB, -1, 0);
+        if (buddy->base_addr != MAP_FAILED) {
+            buddy->is_hugepage = true;
+        } else {
+            ERROR("Hugepage allocation failed for '%s' (errno: %d %s). Falling back to normal memory.", name, errno,
+                  strerror(errno));
+            buddy->is_hugepage = false;
+        }
+    }
+
+    if (!buddy->is_hugepage) {
+        buddy->base_addr = mmap(NULL, buddy->total_size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+        if (buddy->base_addr == MAP_FAILED) {
+            perror("Failed to mmap normal memory");
+            free(buddy->free_lists);
+            free(buddy);
+            return NULL;
+        }
+    }
+
+    buddy->map_entries = buddy->total_size >> buddy->min_alloc_shift;
+    buddy->level_map = calloc(buddy->map_entries, sizeof(int8_t));
+    if (!buddy->level_map) {
+        perror("Failed to allocate level map");
+        munmap(buddy->base_addr, buddy->total_size);
+        free(buddy->free_lists);
+        free(buddy);
+        return NULL;
+    }
+
+    for (unsigned int i = 0; i < buddy->num_levels; i++) {
+        LIST_INIT(&buddy->free_lists[i]);
+    }
+
+    // The entire buffer starts as a single free block on the highest level
+    LIST_INSERT_HEAD(&buddy->free_lists[buddy->num_levels - 1], (struct block_node *)buddy->base_addr, link);
+    buddy->level_map[0] = buddy->num_levels - 1;
+
+    INFO("Buddy allocator '%s' created. Size: %u KB, Base: %p, Hugepage: %s, MinAllocShift: %u, MaxAllocShift: %u, Levels: %u",
+          buddy->name,
+          buddy->total_size / 1024, (void *)buddy->base_addr, buddy->is_hugepage ? "Yes" : "No", buddy->min_alloc_shift,
+          buddy->max_alloc_shift, buddy->num_levels);
+
+    return buddy;
+}
+
+
+vhost_buddy_t vhost_buddy_create_noalloc(const char* name, void* buf, unsigned int size) {
+    vhost_buddy_t buddy = calloc(1, sizeof(struct vhost_buddy));
+    if (!buddy) {
+        perror("Failed to allocate buddy handle");
+        return NULL;
+    }
+    strncpy(buddy->name, name, sizeof(buddy->name) - 1);
+    buddy->min_alloc_shift = MIN_ALLOC_SHIFT;
+
+    buddy->no_alloc = true;
+    buddy->base_addr = buf;
+
+    buddy->total_size = round_up_pow2(size);
+    if (buddy->total_size != size) {
+        ERROR("Size must be a power of two");
+        free(buddy);
+        return NULL;
+    }
+
+    buddy->max_alloc_shift = __builtin_ctz(buddy->total_size);
+    buddy->num_levels = buddy->max_alloc_shift - buddy->min_alloc_shift + 1;
+
+    buddy->free_lists = calloc(buddy->num_levels, sizeof(*buddy->free_lists));
+    if (!buddy->free_lists) {
+        perror("Failed to allocate free lists");
+        free(buddy);
+        return NULL;
+    }
+
+    buddy->map_entries = buddy->total_size >> buddy->min_alloc_shift;
+    buddy->level_map = calloc(buddy->map_entries, sizeof(int8_t));
+    if (!buddy->level_map) {
+        perror("Failed to allocate level map");
+        free(buddy->free_lists);
+        free(buddy);
+        return NULL;
+    }
+
+    for (unsigned int i = 0; i < buddy->num_levels; i++) {
+        LIST_INIT(&buddy->free_lists[i]);
+    }
+
+    // The entire buffer starts as a single free block on the highest level
+    LIST_INSERT_HEAD(&buddy->free_lists[buddy->num_levels - 1], (struct block_node *)buddy->base_addr, link);
+    buddy->level_map[0] = buddy->num_levels - 1;
+
+    INFO("Buddy allocator '%s' created. Size: %u KB, Base: %p, Hugepage: %s, MinAllocShift: %u, MaxAllocShift: %u, Levels: %u, NoAlloc: true",
+          buddy->name,
+          buddy->total_size / 1024, (void *)buddy->base_addr, buddy->is_hugepage ? "Yes" : "No", buddy->min_alloc_shift,
+          buddy->max_alloc_shift, buddy->num_levels);
+
+    return buddy;
+}
+
+void vhost_buddy_destroy(vhost_buddy_t buddy) {
+    if (!buddy) return;
+    if (!buddy->no_alloc) {
+        munmap(buddy->base_addr, buddy->total_size);
+    }
+    free(buddy->level_map);
+    free(buddy->free_lists);
+    free(buddy);
+}
+
+void *vhost_buddy_alloc(vhost_buddy_t buddy, int size) {
+    unsigned int req_level = size_to_level(buddy, size);
+    if (req_level == (unsigned int)-1) return NULL;
+
+    unsigned int current_level;
+    for (current_level = req_level; current_level < buddy->num_levels; current_level++) {
+        if (!LIST_EMPTY(&buddy->free_lists[current_level])) {
             break;
         }
     }
-    nmemb = (1<< (i - 1));
-    INFO("change to nmemb: %lu\n", nmemb);
 
-    nodes = nmemb * 2;
-    offset = sizeof(struct buddy) + sizeof(unsigned int) * nodes;
-    if (offset > mem_len) {
-        return NULL;
+    if (current_level == buddy->num_levels) return NULL;
+
+    struct block_node *block = LIST_FIRST(&buddy->free_lists[current_level]);
+    LIST_REMOVE(block, link);
+
+    while (current_level > req_level) {
+        current_level--;
+        unsigned int block_size = level_to_size(buddy, current_level);
+        void *buddy_addr = (char *)block + block_size;
+
+        LIST_INSERT_HEAD(&buddy->free_lists[current_level], (struct block_node *)buddy_addr, link);
+        buddy->level_map[((char *)buddy_addr - (char *)buddy->base_addr) >> buddy->min_alloc_shift] = current_level;
     }
-    buddy = (struct buddy*)addr;
-    // offset = AlignUp(offset, 4096);
-    if (offset + size * nmemb > mem_len) {
-        return NULL;
+
+    uintptr_t map_idx = ((char *)block - (char *)buddy->base_addr) >> buddy->min_alloc_shift;
+    buddy->level_map[map_idx] = -(req_level + 1);
+
+    return block;
+}
+
+void vhost_buddy_free(vhost_buddy_t buddy, void *addr) {
+    if (!addr) return;
+
+    uintptr_t offset = (char *)addr - (char *)buddy->base_addr;
+    uintptr_t map_idx = offset >> buddy->min_alloc_shift;
+
+    int level_signed = buddy->level_map[map_idx];
+    if (level_signed >= 0) {
+        ERROR("Address %p is not allocated or double freed!", addr);
+        return;
     }
+    unsigned int current_level = -(level_signed)-1;
 
-    buddy->base = (char*)((char*)addr + offset);
+    for (; current_level < buddy->num_levels - 1; current_level++) {
+        unsigned int block_size = level_to_size(buddy, current_level);
+        uintptr_t buddy_offset = offset ^ block_size;
+        uintptr_t buddy_map_idx = buddy_offset >> buddy->min_alloc_shift;
 
-    buddy->nmemb = nmemb;
-    buddy->size = size;
-
-    for (i = 0; i < buddy->nmemb * 2 - 1; i++) {
-        if (IS_POWER_OF_2(i + 1)) {
-            nodes /= 2;
+        if (buddy_map_idx >= buddy->map_entries || buddy->level_map[buddy_map_idx] != current_level) {
+            // Buddy is out of bounds, not free, or not the same size. Stop merging.
+            break;
         }
 
-        buddy->meta[i] = nodes;
+        // Buddy is free, merge them.
+        struct block_node *buddy_node = (struct block_node *)((char *)buddy->base_addr + buddy_offset);
+        LIST_REMOVE(buddy_node, link);
+
+        offset = (offset < buddy_offset) ? offset : buddy_offset;
+        addr = (char *)buddy->base_addr + offset;
     }
 
-    return buddy;
+    LIST_INSERT_HEAD(&buddy->free_lists[current_level], (struct block_node *)addr, link);
+    buddy->level_map[offset >> buddy->min_alloc_shift] = current_level;
 }
 
-void buddy_destroy_with_mem(buddy_t buddy) {
-    (void)buddy;
-    // do nothing
-}
+void *vhost_buddy_base(vhost_buddy_t buddy) { return buddy ? buddy->base_addr : NULL; }
 
-buddy_t buddy_create(unsigned int nmemb, unsigned int size) {
-    struct buddy* buddy;
-    unsigned int nodes, i;
-
-    if (!IS_POWER_OF_2(nmemb)) {
-        return NULL;
-    }
-
-    nodes = nmemb * 2;
-    buddy = (struct buddy*)malloc(sizeof(struct buddy) + sizeof(unsigned int) * nodes);
-    if (!buddy) {
-        return NULL;
-    }
-
-    buddy->base = (char*)malloc(size * nmemb);
-    if (!buddy->base) {
-        goto fail;
-    }
-
-    buddy->nmemb = nmemb;
-    buddy->size = size;
-
-    for (i = 0; i < buddy->nmemb * 2 - 1; i++) {
-        if (IS_POWER_OF_2(i + 1)) {
-            nodes /= 2;
-        }
-
-        buddy->meta[i] = nodes;
-    }
-
-    return buddy;
-
-fail:
-    free(buddy);
-    return NULL;
-}
-
-void buddy_destroy(buddy_t buddy) {
-    struct buddy* __buddy = (struct buddy*)buddy;
-
-    free(__buddy->base);
-    free(__buddy);
-}
-
-void* buddy_base(buddy_t buddy) {
-    struct buddy* __buddy = (struct buddy*)buddy;
-
-    return __buddy->base;
-}
-
-unsigned int buddy_size(buddy_t buddy) {
-    struct buddy* __buddy = (struct buddy*)buddy;
-
-    return __buddy->size;
-}
-
-unsigned int buddy_nmemb(buddy_t buddy) {
-    struct buddy* __buddy = (struct buddy*)buddy;
-
-    return __buddy->nmemb;
-}
-
-void* buddy_alloc(buddy_t buddy, int size) {
-    struct buddy* __buddy = (struct buddy*)buddy;
-    unsigned int index = 0;
-    unsigned int nodes;
-    unsigned int offset = 0;
-    uint64_t alignup = (size + __buddy->size - 1) / __buddy->size;
-
-    if (!IS_POWER_OF_2(alignup)) {
-        alignup = roundup_power_of_2(alignup);
-        alignup = (1ULL << alignup);
-    }
-
-    if (__buddy->meta[index] < alignup) {
-        return NULL;
-    }
-
-    for (nodes = __buddy->nmemb; nodes != alignup; nodes /= 2) {
-        // INFO("index: %d, L_LEAF(index): %d nodes: %d\n", index, L_LEAF(index), nodes);
-        if (__buddy->meta[L_LEAF(index)] >= alignup) {
-            index = L_LEAF(index);
-        } else {
-            index = R_LEAF(index);
-        }
-    }
-
-    __buddy->meta[index] = 0;
-    offset = (index + 1) * nodes - __buddy->nmemb;
-
-    while (index) {
-        index = PARENT(index);
-        __buddy->meta[index] = MAX(__buddy->meta[L_LEAF(index)], __buddy->meta[R_LEAF(index)]);
-    }
-
-    return __buddy->base + offset * __buddy->size;
-}
-
-void buddy_free(buddy_t buddy, void* addr) {
-    struct buddy* __buddy = (struct buddy*)buddy;
-    unsigned int nodes, index = 0;
-    unsigned int left_meta, right_meta, offset;
-
-    offset = ((char*)addr - __buddy->base) / __buddy->size;
-    if (offset * __buddy->size + __buddy->base != addr) {
-        assert(0);
-    }
-
-    nodes = 1;
-    index = offset + __buddy->nmemb - 1;
-
-    for (; __buddy->meta[index]; index = PARENT(index)) {
-        nodes *= 2;
-        if (index == 0) {
-            return;
-        }
-    }
-
-    __buddy->meta[index] = nodes;
-
-    while (index) {
-        index = PARENT(index);
-        nodes *= 2;
-
-        left_meta = __buddy->meta[L_LEAF(index)];
-        right_meta = __buddy->meta[R_LEAF(index)];
-
-        if (left_meta + right_meta == nodes) {
-            __buddy->meta[index] = nodes;
-        } else {
-            __buddy->meta[index] = MAX(left_meta, right_meta);
-        }
-    }
-}
+unsigned int vhost_buddy_size(vhost_buddy_t buddy) { return buddy ? buddy->total_size : 0; }
