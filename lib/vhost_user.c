@@ -246,7 +246,7 @@ int vhost_ioctl(struct libvhost_ctrl *ctrl, enum libvhost_user_msg_type req, voi
             memcpy(&msg.payload.inflight, arg, sizeof(msg.payload.inflight));
             msg.size = sizeof(msg.payload.inflight);
             fds[fd_num++] = ctrl->inflight.fd;
-            INFO("set inflight fd: %d\n", ctrl->inflight.fd);
+            DEBUG("set inflight fd: %d\n", ctrl->inflight.fd);
             break;
 
         default:
@@ -304,7 +304,7 @@ int vhost_ioctl(struct libvhost_ctrl *ctrl, enum libvhost_user_msg_type req, voi
                 }
                 memcpy(arg, &msg.payload.inflight, sizeof(msg.payload.inflight));
                 ctrl->inflight.fd = recv_fds[0];
-                INFO("get inflight fd: %d\n", ctrl->inflight.fd);
+                DEBUG("get inflight fd: %d\n", ctrl->inflight.fd);
                 break;
 
             default:

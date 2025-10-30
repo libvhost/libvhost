@@ -164,9 +164,8 @@ static void libvhost_mem_get_memory_info(struct libvhost_mem* mem, struct libvho
         reg->userspace_addr = mem->hugepages[i].addr;
         reg->memory_size = mem->hugepages[i].size;
         reg->mmap_offset = 0;
-        INFO("memory region %d \n    size: %" PRIu64 "\n    guest physical addr: 0x%" PRIx64
-             "\n    userspace "
-             "addr: 0x%" PRIx64 "\n    mmap offset: 0x%" PRIx64 "\n",
+        INFO("memory region %d size: %" PRIu64 " guest physical addr: 0x%" PRIx64
+             " userspace addr: 0x%" PRIx64 " mmap offset: 0x%" PRIx64 "\n",
              i, reg->memory_size, reg->guest_phys_addr, reg->userspace_addr, reg->mmap_offset);
     }
 }
@@ -366,10 +365,10 @@ static int negotiate_features(struct libvhost_ctrl* ctrl) {
         ERROR("Unable to set vhost features\n");
         return -1;
     }
-    INFO("Features:\n");
+    DEBUG("Features:\n");
     for (i = 0; i < 64; ++i) {
         if (ctrl->features & (1ULL << i)) {
-            INFO("    bit: %2d %s\n", i, get_feature_name(i));
+            DEBUG("    bit: %2d %s\n", i, get_feature_name(i));
         }
     }
 
@@ -382,10 +381,10 @@ static int negotiate_features(struct libvhost_ctrl* ctrl) {
         ERROR("Unable to set vhost protocol features\n");
         return -1;
     }
-    INFO("Protocol Features:\n");
+    DEBUG("Protocol Features:\n");
     for (i = 0; i < 64; ++i) {
         if (ctrl->protocol_features & (1ULL << i)) {
-            INFO("    bit: %2d %s\n", i, get_protocol_feature_name(i));
+            DEBUG("    bit: %2d %s\n", i, get_protocol_feature_name(i));
         }
     }
 
@@ -614,13 +613,13 @@ static int vhost_enable_vq(struct libvhost_ctrl* ctrl, struct libvhost_virt_queu
 
     state.index = vq->idx;
     state.num = vq->size;
-    INFO("Setup virtqueue %d\n", vq->idx);
+    DEBUG("Setup virtqueue %d\n", vq->idx);
     // Tell the backend that the virtqueue size.
     if (vhost_ioctl(ctrl, VHOST_USER_SET_VRING_NUM, &state) != 0) {
         ERROR("Unable to set vring num\n");
         return -1;
     }
-    INFO("  VHOST_USER_SET_VRING_NUM idx: %d num: %d\n", state.index, state.num);
+    DEBUG("  VHOST_USER_SET_VRING_NUM idx: %d num: %d\n", state.index, state.num);
     state.index = vq->idx;
     state.num = vq->last_used_idx;
     // Tell the backend that the available ring last used index.
@@ -628,7 +627,7 @@ static int vhost_enable_vq(struct libvhost_ctrl* ctrl, struct libvhost_virt_queu
         ERROR("Unable to set vring base\n");
         return -1;
     }
-    INFO("  VHOST_USER_SET_VRING_BASE idx: %d num: %d\n", state.index, state.num);
+    DEBUG("  VHOST_USER_SET_VRING_BASE idx: %d num: %d\n", state.index, state.num);
 
     VhostVringAddr addr;
     addr.index = vq->idx;
@@ -643,7 +642,7 @@ static int vhost_enable_vq(struct libvhost_ctrl* ctrl, struct libvhost_virt_queu
         ERROR("Unable to set vring addr\n");
         return -1;
     }
-    INFO(
+    DEBUG(
         "  VHOST_USER_SET_VRING_ADDR idx: %d desc_user_addr: %lx "
         "used_user_addr: %lx avail_user_addr: %lx log_guest_addr: %lx\n",
         addr.index, addr.desc_user_addr, addr.used_user_addr, addr.avail_user_addr,
@@ -657,7 +656,7 @@ static int vhost_enable_vq(struct libvhost_ctrl* ctrl, struct libvhost_virt_queu
         ERROR("Unable to set vring call\n");
         return -1;
     }
-    INFO("  VHOST_USER_SET_VRING_CALL idx: %d fd: %d\n", file.index, file.fd);
+    DEBUG("  VHOST_USER_SET_VRING_CALL idx: %d fd: %d\n", file.index, file.fd);
 
     file.index = vq->idx;
     file.fd = vq->kickfd;
@@ -666,7 +665,7 @@ static int vhost_enable_vq(struct libvhost_ctrl* ctrl, struct libvhost_virt_queu
         ERROR("Unable to set vring kick\n");
         return -1;
     }
-    INFO("  VHOST_USER_SET_VRING_KICK idx: %d fd: %d\n", file.index, file.fd);
+    DEBUG("  VHOST_USER_SET_VRING_KICK idx: %d fd: %d\n", file.index, file.fd);
 
     return 0;
 }
