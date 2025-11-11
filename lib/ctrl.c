@@ -697,11 +697,11 @@ int libvhost_ctrl_add_virtqueue(struct libvhost_ctrl* ctrl, int num_io_queues, i
 }
 
 static int vhost_stop_vq(struct libvhost_ctrl* ctrl, struct libvhost_virt_queue* vq) {
-    INFO("Stop virtqueue %d\n", vq->idx);
+    DEBUG("Stop virtqueue %d\n", vq->idx);
     VhostVringState state;
     state.index = vq->idx;
     state.num = 0;
-    INFO("  VHOST_USER_GET_VRING_base idx: %d\n", state.index);
+    DEBUG("  VHOST_USER_GET_VRING_base idx: %d\n", state.index);
     if (vhost_ioctl(ctrl, VHOST_USER_GET_VRING_BASE, &state) != 0) {
         ERROR("Unable to get vring base, vq: %d\n", vq->idx);
         return -1;
