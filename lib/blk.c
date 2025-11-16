@@ -14,7 +14,6 @@
 #include <linux/virtio_ring.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <string.h>
 #include <unistd.h>
 
 static int blk_add_req(struct libvhost_virt_queue* vq, struct libvhost_virtio_blk_req* vbr, struct iovec* data_iovs,
@@ -42,7 +41,7 @@ static int blk_add_req(struct libvhost_virt_queue* vq, struct libvhost_virtio_bl
     // put status.
     iovec_init(&iovs[num_out + num_in++], &vbr->status, sizeof(vbr->status));
 
-    virtring_add(vq, iovs, num_out, num_in, data);
+    virtqueue_add(vq, iovs, num_out, num_in, data);
     return 0;
 }
 
